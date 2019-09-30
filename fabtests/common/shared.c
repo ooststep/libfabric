@@ -995,7 +995,8 @@ int ft_enable_ep(struct fid_ep *ep, struct fid_eq *eq, struct fid_av *av,
 	uint64_t flags;
 	int ret;
 
-	if (fi->ep_attr->type == FI_EP_MSG || fi->caps & FI_MULTICAST)
+	if (fi->ep_attr->type == FI_EP_MSG || fi->caps & FI_MULTICAST ||
+	    fi->caps & FI_COLLECTIVE)
 		FT_EP_BIND(ep, eq, 0);
 
 	FT_EP_BIND(ep, av, 0);

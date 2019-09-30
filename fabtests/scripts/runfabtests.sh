@@ -199,6 +199,7 @@ complex_tests=(
 
 multinode_tests=(
 	"fi_multinode"
+	"fi_multinode_coll"
 )
 
 function errcho {
