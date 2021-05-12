@@ -128,18 +128,23 @@ struct ofi_byteq {
 	size_t size;
 	unsigned int head;
 	unsigned int tail;
-	uint8_t data[OFI_BYTEQ_SIZE];
+	uint8_t *data;
 };
 
 static inline void ofi_byteq_init(struct ofi_byteq *byteq, ssize_t size)
 {
 	memset(byteq, 0, sizeof *byteq);
-	if (size > OFI_BYTEQ_SIZE)
-		byteq->size = OFI_BYTEQ_SIZE;
-	else if (size >= 0)
+	if (size >= 0) {
 		byteq->size = size;
-	else
+	} else {
 		byteq->size = 0;
+	}
+	byteq->data = calloc(1, byteq->size);
+}
+
+static inline void ofi_byteq_free(struct ofi_byteq *byteq)
+{
+	free(byteq->data);
 }
 
 static inline size_t ofi_byteq_readable(struct ofi_byteq *byteq)
@@ -235,6 +240,13 @@ ofi_bsock_init(struct ofi_bsock *bsock, ssize_t sbuf_size, ssize_t rbuf_size)
 	bsock->sock = INVALID_SOCKET;
 	ofi_byteq_init(&bsock->sq, sbuf_size);
 	ofi_byteq_init(&bsock->rq, rbuf_size);
+}
+
+static inline void
+ofi_bsock_free(struct ofi_bsock *bsock)
+{
+	ofi_byteq_free(&bsock->sq);
+	ofi_byteq_free(&bsock->rq);
 }
 
 static inline size_t ofi_bsock_readable(struct ofi_bsock *bsock)

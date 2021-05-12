@@ -531,6 +531,7 @@ static int tcpx_ep_close(struct fid *fid)
 					 &ep->util_ep.ep_fid.fid);
 	}
 	ofi_close_socket(ep->bsock.sock);
+	ofi_bsock_free(&ep->bsock);
 	ofi_endpoint_close(&ep->util_ep);
 	fastlock_destroy(&ep->lock);
 
@@ -733,6 +734,7 @@ err3:
 	ofi_close_socket(ep->bsock.sock);
 err2:
 	ofi_endpoint_close(&ep->util_ep);
+	ofi_bsock_free(&ep->bsock);
 err1:
 	free(ep);
 	return ret;
