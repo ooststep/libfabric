@@ -38,6 +38,10 @@
 
 #include <shared.h>
 
+
+#define BASE_TAG 0x900d
+#define SEND_CNT 8
+
 static struct fi_context fi_context;
 
 static int wait_for_send_comp(int count)
@@ -103,91 +107,177 @@ static int trecv_op(uint64_t tag, uint64_t flags, bool ignore_nomsg)
 	return ret;
 }
 
-static int run(void)
+static int test_bad(void)
+{
+	int ret;
+
+	printf("Peek for a bad msg\n");
+	ret = trecv_op(0xbad, FI_PEEK, false);
+	if (ret != -FI_ENOMSG) {
+		FT_PRINTERR("FI_PEEK - bad msg", ret);
+		return ret;
+	}
+
+	printf("Peek w/ claim for a bad msg\n");
+	ret = trecv_op(0xbad, FI_PEEK | FI_CLAIM, false);
+	if (ret != -FI_ENOMSG) {
+		FT_PRINTERR("FI_PEEK - claim bad msg", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int test_peek(void)
+{
+	int ret;
+
+	printf("Peek msg 1\n");
+	ret = trecv_op(BASE_TAG + 1, FI_PEEK, true);
+	if (ret != 1) {
+		FT_PRINTERR("FI_PEEK", ret);
+		return ret;
+	}
+
+	printf("Receive msg 1\n");
+	ret = trecv_op(BASE_TAG + 1, 0, false);
+	if (ret != 1) {
+		FT_PRINTERR("Receive after peek", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int test_claim(void)
+{
+	int ret;
+
+	printf("Peek w/ claim msg 2\n");
+	ret = trecv_op(BASE_TAG + 2, FI_PEEK | FI_CLAIM, true);
+	if (ret != 1) {
+		FT_PRINTERR("FI_PEEK | FI_CLAIM", ret);
+		return ret;
+	}
+
+	printf("Receive claimed msg 2\n");
+	ret = trecv_op(BASE_TAG + 2, FI_CLAIM, false);
+	if (ret != 1) {
+		FT_PRINTERR("FI_CLAIM", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int test_discard(void)
+{
+	int ret;
+
+	printf("Peek & discard msg 3\n");
+	ret = trecv_op(BASE_TAG + 3, FI_PEEK | FI_DISCARD, true);
+	if (ret != 1) {
+		FT_PRINTERR("FI_PEEK | FI_DISCARD", ret);
+		return ret;
+	}
+
+	printf("Checking to see if msg 3 was discarded\n");
+	ret = trecv_op(BASE_TAG + 3, FI_PEEK, false);
+	if (ret != -FI_ENOMSG) {
+		FT_PRINTERR("FI_PEEK", ret);
+		return ret;
+	}
+
+	printf("Peek w/ claim msg 4\n");
+	ret = trecv_op(BASE_TAG + 4, FI_PEEK | FI_CLAIM, true);
+	if (ret != 1) {
+		FT_PRINTERR("FI_DISCARD", ret);
+		return ret;
+	}
+
+	printf("Claim and discard msg 4\n");
+	ret = trecv_op(BASE_TAG + 4, FI_CLAIM | FI_DISCARD, false);
+	if (ret != 1) {
+		FT_PRINTERR("FI_CLAIM", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int test_ooo(void)
 {
 	int i, ret;
+
+	for (i = SEND_CNT; i >= 5; i--) {
+		printf("Receive msg %d\n", i);
+		ret = trecv_op(BASE_TAG + i, 0, false);
+		if (ret != 1) {
+			FT_PRINTERR("trecv", ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int do_recvs(void)
+{
+	int ret;
+
+	ret = test_bad();
+	if (ret)
+		return ret;
+
+	ret = test_peek();
+	if (ret)
+		return ret;
+
+	ret = test_claim();
+	if (ret)
+		return ret;
+
+	ret = test_discard();
+	if (ret)
+		return ret;
+
+	ret = test_ooo();
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static int do_sends(void)
+{
+	int i, ret;
+
+	printf("Sending %d tagged messages\n", SEND_CNT);
+	for(i = 1; i <= SEND_CNT; i++) {
+		ret = fi_tsend(ep, tx_buf, tx_size, mr_desc,
+				remote_fi_addr, BASE_TAG + i,
+				&tx_ctx_arr[i].context);
+		if (ret)
+			return ret;
+	}
+
+	printf("Waiting for messages to complete\n");
+	ret = wait_for_send_comp(SEND_CNT);
+	return ret;
+}
+
+static int run(void)
+{
+	int ret;
 
 	ret = ft_init_fabric();
 	if (ret)
 		return ret;
 
 	if (opts.dst_addr) {
-		printf("Searching for a bad msg\n");
-		ret = trecv_op(0xbad, FI_PEEK, false);
-		if (ret != -FI_ENOMSG) {
-			FT_PRINTERR("FI_PEEK", ret);
+		ret = do_recvs();
+		if (ret)
 			return ret;
-		}
-
-		printf("Searching for a bad msg with claim\n");
-		ret = trecv_op(0xbad, FI_PEEK | FI_CLAIM, false);
-		if (ret != -FI_ENOMSG) {
-			FT_PRINTERR("FI_PEEK", ret);
-			return ret;
-		}
-
-		printf("Searching for first msg\n");
-		ret = trecv_op(0x900d, FI_PEEK, true);
-		if (ret != 1) {
-			FT_PRINTERR("FI_PEEK", ret);
-			return ret;
-		}
-
-		printf("Receiving first msg\n");
-		ret = trecv_op(0x900d, 0, false);
-		if (ret != 1) {
-			FT_PRINTERR("Receive after peek", ret);
-			return ret;
-		}
-
-		printf("Searching for second msg to claim\n");
-		ret = trecv_op(0x900d + 1, FI_PEEK | FI_CLAIM, true);
-		if (ret != 1) {
-			FT_PRINTERR("FI_PEEK | FI_CLAIM", ret);
-			return ret;
-		}
-
-		printf("Receiving second msg\n");
-		ret = trecv_op(0x900d + 1, FI_CLAIM, false);
-		if (ret != 1) {
-			FT_PRINTERR("FI_CLAIM", ret);
-			return ret;
-		}
-
-		printf("Searching for third msg to peek and discard\n");
-		ret = trecv_op(0x900d + 2, FI_PEEK | FI_DISCARD, true);
-		if (ret != 1) {
-			FT_PRINTERR("FI_PEEK | FI_DISCARD", ret);
-			return ret;
-		}
-
-		printf("Checking to see if third msg was discarded\n");
-		ret = trecv_op(0x900d + 2, FI_PEEK, false);
-		if (ret != -FI_ENOMSG) {
-			FT_PRINTERR("FI_PEEK", ret);
-			return ret;
-		}
-
-		printf("Searching for fourth msg to claim and discard\n");
-		ret = trecv_op(0x900d + 3, FI_PEEK | FI_CLAIM, true);
-		if (ret != 1) {
-			FT_PRINTERR("FI_DISCARD", ret);
-			return ret;
-		}
-
-		printf("Discarding fourth msg\n");
-		ret = trecv_op(0x900d + 3, FI_CLAIM | FI_DISCARD, false);
-		if (ret != 1) {
-			FT_PRINTERR("FI_CLAIM", ret);
-			return ret;
-		}
-
-		printf("Retrieving fifth message\n");
-		ret = trecv_op(0x900d + 4, 0, false);
-		if (ret != 1) {
-			FT_PRINTERR("Receive after peek", ret);
-			return ret;
-		}
 
 		/* sync with sender before ft_finalize, since we sent
 		 * and received messages outside of the sequence numbers
@@ -202,16 +292,7 @@ static int run(void)
 		if (ret)
 			return ret;
 	} else {
-		printf("Sending five tagged messages\n");
-		for(i = 0; i < 5; i++) {
-			ret = fi_tsend(ep, tx_buf, tx_size, mr_desc,
-				       remote_fi_addr, 0x900d+i,
-				       &tx_ctx_arr[i].context);
-			if (ret)
-				return ret;
-		}
-		printf("Waiting for messages to complete\n");
-		ret = wait_for_send_comp(5);
+		ret = do_sends();
 		if (ret)
 			return ret;
 
@@ -232,8 +313,9 @@ int main(int argc, char **argv)
 
 	opts = INIT_OPTS;
 	opts.options |= FT_OPT_SIZE;
+	opts.transfer_size = 64;  /* Don't expect much receiver buffering */
 	opts.comp_method = FT_COMP_SREAD;
-	opts.window_size = 5;
+	opts.window_size = SEND_CNT;
 
 	hints = fi_allocinfo();
 	if (!hints) {
