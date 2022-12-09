@@ -313,7 +313,7 @@ int main(int argc, char **argv)
 
 	opts = INIT_OPTS;
 	opts.options |= FT_OPT_SIZE;
-	opts.transfer_size = 64;  /* Don't expect much receiver buffering */
+	opts.transfer_size = 64;  /* Don't expect receiver buffering */
 	opts.comp_method = FT_COMP_SREAD;
 	opts.window_size = SEND_CNT;
 
