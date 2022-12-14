@@ -145,6 +145,8 @@ void xnet_complete_saved(struct xnet_xfer_entry *saved_entry)
 				saved_entry->iov_cnt, 0,
 				&saved_entry->hdr.max_hdr[XNET_MAX_HDR],
 				msg_len, OFI_COPY_BUF_TO_IOV);
+		FI_LOG_BUF(&xnet_prov, FI_LOG_DEBUG, FI_LOG_EP_DATA,
+			   &saved_entry->hdr.max_hdr[XNET_MAX_HDR], msg_len);
 	} else {
 		copied = 0;
 	}
@@ -245,10 +247,19 @@ static ssize_t xnet_send_msg(struct xnet_ep *ep)
 	struct xnet_xfer_entry *tx_entry;
 	ssize_t ret;
 	size_t len;
+	size_t msg_len;
 
 	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
 	assert(ep->cur_tx.entry);
 	tx_entry = ep->cur_tx.entry;
+	msg_len = (tx_entry->hdr.base_hdr.size -
+		   tx_entry->hdr.base_hdr.hdr_size);
+
+	FI_DBG(&xnet_prov, FI_LOG_EP_DATA, "Sending msg "
+	       "tag 0x%zx src %zu size %zu\n", tx_entry->hdr.tag_hdr.tag,
+	       tx_entry->src_addr, msg_len);
+	FI_LOG_BUF(&xnet_prov, FI_LOG_DEBUG, FI_LOG_EP_DATA,
+		   tx_entry->iov[0].iov_base, tx_entry->iov[0].iov_len);
 	ret = ofi_bsock_sendv(&ep->bsock, tx_entry->iov, tx_entry->iov_cnt,
 			      &len);
 	if (ret < 0 && ret != -OFI_EINPROGRESS_ASYNC)

@@ -39,6 +39,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <ofi.h>
 #include <ofi_list.h>
 #include <ofi_osd.h>
@@ -96,6 +97,44 @@ static inline int ofi_str_dup(const char *src, char **dst)
 	}
 	return 0;
 }
+
+static inline void add_char(char **buf, uint8_t c, uint8_t space) {
+    if ( space ) {
+	    sprintf(*buf, " ");
+        *buf += 1;
+    }
+    sprintf (*buf, "%02x", c);
+    *buf += 2;
+}
+
+static inline void ofi_mem_dump(const struct fi_provider *prov,
+	enum fi_log_level level, enum fi_log_subsys subsys, const char *func, int line,
+	const void *src, size_t size)
+{
+	unsigned int width = 32;
+	char temp[128] = {0};
+	char *offset = temp;
+	const char *orig = src;
+	unsigned int i;
+	for (i = 0; i <= size; i++) {
+		if ((i % width) == 0 || i == size) {
+			if (i != 0) {
+				while ((i % width) != 0) {
+					add_char(&offset, 0, (i % 8) == 0);
+					i++;
+				}
+				snprintf(offset++, width, " %s", &orig[i - width]);
+				fi_log(prov, level, subsys, func, line, "%s\n", temp);
+			}
+			offset = &temp[i % width];
+			sprintf(offset, "%08x ", i);
+			offset += 9;
+		}
+		add_char(&offset, orig[i], (i % 8) == 0);
+	}
+}
+
+#define FI_LOG_BUF(prov, level, subsys, buf, len) ofi_mem_dump(prov, level, subsys, __func__, __LINE__, buf, len)
 
 /* Dynamic array -- see ofi_indexer.h */
 
