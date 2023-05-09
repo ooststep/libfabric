@@ -626,6 +626,21 @@ xnet_alloc_rx(struct xnet_ep *ep)
 	return xfer;
 }
 
+static inline ssize_t
+xnet_dynamic_rx(struct xnet_xfer_entry *recv_entry, size_t msg_len)
+{
+	recv_entry->user_buf = malloc(msg_len);
+	if (!recv_entry->user_buf)
+		return -FI_ENOMEM;
+
+	recv_entry->iov[0].iov_base = recv_entry->user_buf;
+	recv_entry->iov[0].iov_len = msg_len;
+	recv_entry->iov_cnt = 1;
+	recv_entry->ctrl_flags |= XNET_FREE_BUF;
+
+	return FI_SUCCESS;
+}
+
 static inline struct xnet_xfer_entry *
 xnet_alloc_tx(struct xnet_ep *ep)
 {
