@@ -68,8 +68,10 @@ int xnet_trace_msg;
 int xnet_disable_autoprog;
 int xnet_io_uring;
 int xnet_max_saved = 4;
+int xnet_max_dyn_rx = 2;
 size_t xnet_max_inject = XNET_DEF_INJECT;
 size_t xnet_buf_size = XNET_DEF_BUF_SIZE;
+size_t xnet_max_dyn_rx_size = XNET_DEF_MAX_DYN_RX_SIZE;
 
 
 static void xnet_init_env(void)

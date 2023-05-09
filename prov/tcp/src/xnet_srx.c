@@ -380,7 +380,7 @@ xnet_srx_peek(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 
 	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
 	assert(srx->rdm);
-
+printf("peeking\n");
 	if (!xnet_find_msg(srx, recv_entry, &ep, &saved_entry, false))
 		goto nomatch;
 
@@ -410,9 +410,12 @@ xnet_srx_peek(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 
 	xnet_report_success(recv_entry);
 	xnet_free_xfer(xnet_srx2_progress(srx), recv_entry);
+	printf("peeking passed\n");
 	return FI_SUCCESS;
 
 nomatch:
+	printf("peeking failed\n");
+	srx->recent_peek = true;
 	memset(&err_entry, 0, sizeof(err_entry));
 	err_entry.op_context = recv_entry->context;
 	err_entry.flags = FI_RECV | FI_TAGGED;

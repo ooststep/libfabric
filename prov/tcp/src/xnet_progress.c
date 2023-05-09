@@ -84,23 +84,48 @@ static void xnet_submit_uring(struct xnet_uring *uring)
 
 static bool xnet_save_and_cont(struct xnet_ep *ep)
 {
+	struct slist_entry *cur, *prev;
+	struct xnet_xfer_entry *xfer_entry;
+
 	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
 	assert(ep->cur_rx.hdr.base_hdr.op == ofi_op_tagged);
 	assert(ep->srx);
 
-	if ((ep->cur_rx.data_left > xnet_buf_size) ||
-	    (ep->peer->fi_addr == FI_ADDR_NOTAVAIL))
+	if ((ep->cur_rx.data_left > xnet_buf_size &&
+			(/*ep->dyn_rx_cnt > xnet_max_dyn_rx &&*/
+			ep->cur_rx.data_left > xnet_max_dyn_rx_size)) ||
+	    (ep->peer->fi_addr == FI_ADDR_NOTAVAIL)) {
+		printf("sac: no 1\n");
 		return false;
+	}
 
+
+	(void) prev;
+	slist_foreach(&ep->rx_queue, cur, prev) {
+		xfer_entry = container_of(cur, struct xnet_xfer_entry, entry);
+		if (xfer_entry->src_addr != FI_ADDR_UNSPEC)
+			goto found;
+	}
+
+	if (!ep->srx->recent_peek) {
+		printf("sac: no 2\n");
+		return false;
+	}
+
+found:
+	ep->srx->recent_peek = false;
 	if (!ep->saved_msg) {
 		ep->saved_msg = ofi_array_at(&ep->srx->saved_msgs,
 					     ep->peer->fi_addr);
-		if (!ep->saved_msg)
+		if (!ep->saved_msg) {
+			printf("sac: no 3");
 			return false;
+		}
 		assert(!ep->saved_msg->ep);
 		ep->saved_msg->ep = ep;
 	}
 
+	printf("sac: %s 4\n", ep->saved_msg->cnt < xnet_max_saved ? "yes" : "no");
 	return (ep->saved_msg->cnt < xnet_max_saved);
 }
 
@@ -109,6 +134,7 @@ xnet_get_save_rx(struct xnet_ep *ep, uint64_t tag)
 {
 	struct xnet_progress *progress;
 	struct xnet_xfer_entry *rx_entry;
+	size_t msg_len;
 
 	progress = xnet_ep2_progress(ep);
 	assert(xnet_progress_locked(progress));
@@ -116,11 +142,24 @@ xnet_get_save_rx(struct xnet_ep *ep, uint64_t tag)
 	assert(ep->cur_rx.hdr_done == ep->cur_rx.hdr_len &&
 	       !ep->cur_rx.claim_ctx);
 
-	FI_DBG(&xnet_prov, FI_LOG_EP_DATA, "Saving msg tag 0x%zx src %zu\n",
-	       tag, ep->peer->fi_addr);
+	msg_len = ep->cur_rx.hdr.base_hdr.size - ep->cur_rx.hdr.base_hdr.hdr_size;
+
+	FI_DBG(&xnet_prov, FI_LOG_EP_DATA, "Saving msg tag 0x%zx src %zu size %zu\n",
+	       tag, ep->peer->fi_addr, msg_len);
+
+	if (xnet_buf_size < msg_len && xnet_max_dyn_rx <= ep->dyn_rx_cnt &&
+		xnet_max_dyn_rx_size < msg_len) {
+		FI_WARN(&xnet_prov, FI_LOG_EP_DATA,
+			"msg (size:%zu) exceeds buffer limits: xnet_max_rx_size (%zu) "
+			"xnet_max_dyn_rx (%d) xnet_max_dyn_rx_size (%zu) \n",
+			msg_len, xnet_buf_size, xnet_max_dyn_rx, xnet_max_dyn_rx_size);
+		return NULL;
+	}
+
 	rx_entry = xnet_alloc_xfer(xnet_srx2_progress(ep->srx));
 	if (!rx_entry)
 		return NULL;
+
 
 	rx_entry->ctrl_flags = XNET_SAVED_XFER;
 	rx_entry->saving_ep = ep;
@@ -133,8 +172,16 @@ xnet_get_save_rx(struct xnet_ep *ep, uint64_t tag)
 	rx_entry->context = NULL;
 	rx_entry->user_buf = NULL;
 	rx_entry->iov_cnt = 1;
-	rx_entry->iov[0].iov_base = &rx_entry->msg_data;
-	rx_entry->iov[0].iov_len = xnet_buf_size;
+	if (xnet_buf_size < msg_len) {
+		if (xnet_dynamic_rx(rx_entry, msg_len)) {
+			xnet_free_xfer(progress, rx_entry);
+			return NULL;
+		}
+		ep->dyn_rx_cnt++;
+	} else {
+		rx_entry->iov[0].iov_base = &rx_entry->msg_data;
+		rx_entry->iov[0].iov_len = xnet_buf_size;
+	}
 
 	slist_insert_tail(&rx_entry->entry, &ep->saved_msg->queue);
 	if (!ep->saved_msg->cnt++) {
@@ -192,7 +239,9 @@ void xnet_recv_saved(struct xnet_xfer_entry *saved_entry,
 	FI_DBG(&xnet_prov, FI_LOG_EP_DATA, "recv matched saved msg "
 	       "tag 0x%zx src %zu\n", saved_entry->tag, saved_entry->src_addr);
 
+	//saved_entry->saving_ep->dyn_rx_cnt--;
 	saved_entry->ctrl_flags &= ~XNET_SAVED_XFER;
+	saved_entry->ctrl_flags &= ~XNET_FREE_BUF;
 	saved_entry->context = rx_entry->context;
 	saved_entry->user_buf = rx_entry->user_buf;
 	saved_entry->cq_flags |= rx_entry->cq_flags;

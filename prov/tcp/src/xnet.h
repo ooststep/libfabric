@@ -67,12 +67,13 @@
 #define _XNET_H_
 
 
-#define XNET_RDM_VERSION	0
-#define XNET_DEF_INJECT		128
-#define XNET_DEF_BUF_SIZE	16384
-#define XNET_MAX_EVENTS		128
-#define XNET_MIN_MULTI_RECV	16384
-#define XNET_PORT_MAX_RANGE	(USHRT_MAX)
+#define XNET_RDM_VERSION			0
+#define XNET_DEF_INJECT				128
+#define XNET_DEF_BUF_SIZE			16384
+#define XNET_DEF_MAX_DYN_RX_SIZE	1048576
+#define XNET_MAX_EVENTS				128
+#define XNET_MIN_MULTI_RECV			16384
+#define XNET_PORT_MAX_RANGE			(USHRT_MAX)
 
 extern struct fi_provider	xnet_prov;
 extern struct util_prov		xnet_util_prov;
@@ -94,6 +95,8 @@ extern int xnet_io_uring;
 extern int xnet_max_saved;
 extern size_t xnet_max_inject;
 extern size_t xnet_buf_size;
+extern int xnet_max_dyn_rx;
+extern size_t xnet_max_dyn_rx_size;
 struct xnet_xfer_entry;
 struct xnet_ep;
 struct xnet_rdm;
@@ -221,6 +224,7 @@ struct xnet_ep {
 	struct xnet_saved_msg	*saved_msg;
 	int			rx_avail;
 	struct xnet_srx		*srx;
+	size_t				dyn_rx_cnt;
 
 	enum xnet_state		state;
 	struct util_peer_addr	*peer;
