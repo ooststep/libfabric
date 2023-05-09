@@ -201,6 +201,7 @@ struct xnet_srx {
 	struct xnet_rdm		*rdm;
 	struct xnet_cq		*cq;
 	struct util_cntr	*cntr;
+	bool			recent_peek;
 };
 
 int xnet_srx_context(struct fid_domain *domain, struct fi_rx_attr *attr,
