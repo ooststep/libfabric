@@ -143,6 +143,17 @@ static void xnet_init_env(void)
 	if (xnet_max_inject > xnet_buf_size)
 		xnet_buf_size = xnet_max_inject;
 
+
+	fi_param_define(&xnet_prov, "max_dyn_rx", FI_PARAM_SIZE_T,
+			"maximum number of dynamically allocated receive buffers "
+			"(default: %zu)", xnet_max_dyn_rx);
+	fi_param_get_int(&xnet_prov, "max_dyn_rx", &xnet_max_dyn_rx);
+
+	fi_param_define(&xnet_prov, "max_dyn_rx_size", FI_PARAM_SIZE_T,
+			"maximum size size of dynamically allocated receive buffers "
+			"(default: %zu)", xnet_max_dyn_rx_size);
+	fi_param_get_size_t(&xnet_prov, "max_dyn_rx_size", &xnet_max_dyn_rx_size);
+
 	fi_param_define(&xnet_prov, "nodelay", FI_PARAM_BOOL,
 			"overrides default TCP_NODELAY socket setting "
 			"(default %d)", xnet_nodelay);
