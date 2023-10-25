@@ -72,8 +72,8 @@ static void xnet_rma_read_send_entry_fill(struct xnet_xfer_entry *send_entry,
 
 	send_entry->iov[0].iov_base = (void *) &send_entry->hdr;
 	send_entry->iov[0].iov_len = offset;
-	send_entry->iov_cnt = 1;
-	send_entry->context = msg->context;
+	send_entry->entry.count = 1;
+	send_entry->entry.context = msg->context;
 	send_entry->ctrl_flags = XNET_NEED_RESP;
 	send_entry->resp_entry = recv_entry;
 
@@ -90,10 +90,10 @@ static void xnet_rma_read_recv_entry_fill(struct xnet_xfer_entry *recv_entry,
 	memcpy(&recv_entry->iov[0], &msg->msg_iov[0],
 	       msg->iov_count * sizeof(struct iovec));
 
-	recv_entry->iov_cnt = msg->iov_count;
-	recv_entry->context = msg->context;
-	recv_entry->cq_flags = xnet_tx_completion_get_msgflags(ep, flags) |
-			       FI_RMA | FI_READ;
+	recv_entry->entry.count = msg->iov_count;
+	recv_entry->entry.context = msg->context;
+	recv_entry->entry.flags = xnet_tx_completion_get_msgflags(ep, flags) |
+								  FI_RMA | FI_READ;
 
 	/* Read response completes the RMA read transmit */
 	recv_entry->cntr = ep->util_ep.cntrs[CNTR_RD];
@@ -136,7 +136,8 @@ xnet_rma_readmsg(struct fid_ep *ep_fid, const struct fi_msg_rma *msg,
 	xnet_rma_read_send_entry_fill(send_entry, recv_entry, ep, msg);
 	xnet_rma_read_recv_entry_fill(recv_entry, ep, msg, flags);
 
-	slist_insert_tail(&recv_entry->entry, &ep->rma_read_queue);
+	slist_insert_tail((struct slist_entry*)&recv_entry->entry,
+			  &ep->rma_read_queue);
 	xnet_tx_queue_insert(ep, send_entry);
 unlock:
 	ofi_genlock_unlock(&xnet_ep2_progress(ep)->ep_lock);
@@ -251,22 +252,22 @@ xnet_rma_writemsg(struct fid_ep *ep_fid, const struct fi_msg_rma *msg,
 				 (uint8_t *)&send_entry->hdr + offset,
 				 data_len,
 				 OFI_COPY_IOV_TO_BUF);
-		send_entry->iov_cnt = 1;
+		send_entry->entry.count = 1;
 		offset += data_len;
 	} else {
 		memcpy(&send_entry->iov[1], &msg->msg_iov[0],
 		       msg->iov_count * sizeof(struct iovec));
-		send_entry->iov_cnt = msg->iov_count + 1;
+		send_entry->entry.count = msg->iov_count + 1;
 	}
 
 	send_entry->iov[0].iov_base = (void *) &send_entry->hdr;
 	send_entry->iov[0].iov_len = offset;
 
-	send_entry->cq_flags = xnet_tx_completion_get_msgflags(ep, flags) |
+	send_entry->entry.flags = xnet_tx_completion_get_msgflags(ep, flags) |
 			       FI_RMA | FI_WRITE;
 	send_entry->cntr = ep->util_ep.cntrs[CNTR_WR];
 	xnet_set_commit_flags(send_entry, flags);
-	send_entry->context = msg->context;
+	send_entry->entry.context = msg->context;
 
 	xnet_tx_queue_insert(ep, send_entry);
 unlock:
@@ -406,10 +407,10 @@ xnet_rma_inject_common(struct fid_ep *ep_fid, const void *buf, size_t len,
 
 	send_entry->iov[0].iov_base = (void *) &send_entry->hdr;
 	send_entry->iov[0].iov_len = offset;
-	send_entry->iov_cnt = 1;
+	send_entry->entry.count = 1;
 
 	send_entry->hdr.base_hdr.size = offset;
-	send_entry->cq_flags = FI_INJECT | FI_WRITE;
+	send_entry->entry.flags = FI_INJECT | FI_WRITE;
 	send_entry->cntr = ep->util_ep.cntrs[CNTR_WR];
 	xnet_tx_queue_insert(ep, send_entry);
 unlock:

@@ -74,7 +74,8 @@ xnet_srx_msg(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 	progress = xnet_srx2_progress(srx);
 	assert(xnet_progress_locked(progress));
 	/* See comment with xnet_srx_tag(). */
-	slist_insert_tail(&recv_entry->entry, &srx->rx_queue);
+	slist_insert_tail((struct slist_entry*)&recv_entry->entry,
+			  &srx->rx_queue);
 
 	if (!dlist_empty(&progress->unexp_msg_list)) {
 		if (recv_entry->ctrl_flags & FI_MULTI_RECV) {
@@ -107,9 +108,9 @@ xnet_srx_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
 	}
 
 	recv_entry->ctrl_flags = flags & FI_MULTI_RECV;
-	recv_entry->cq_flags = (flags & FI_COMPLETION) | FI_MSG | FI_RECV;
-	recv_entry->context = msg->context;
-	recv_entry->iov_cnt = msg->iov_count;
+	recv_entry->entry.flags = (flags & FI_COMPLETION) | FI_MSG | FI_RECV;
+	recv_entry->entry.context = msg->context;
+	recv_entry->entry.count = msg->iov_count;
 	if (msg->iov_count) {
 		recv_entry->user_buf = msg->msg_iov[0].iov_base;
 		memcpy(&recv_entry->iov[0], msg->msg_iov,
@@ -141,9 +142,9 @@ xnet_srx_recv(struct fid_ep *ep_fid, void *buf, size_t len, void *desc,
 	}
 
 	recv_entry->ctrl_flags = srx->op_flags & FI_MULTI_RECV;
-	recv_entry->cq_flags = FI_MSG | FI_RECV;
-	recv_entry->context = context;
-	recv_entry->iov_cnt = 1;
+	recv_entry->entry.flags = FI_MSG | FI_RECV;
+	recv_entry->entry.context = context;
+	recv_entry->entry.count = 1;
 	recv_entry->user_buf = buf;
 	recv_entry->iov[0].iov_base = buf;
 	recv_entry->iov[0].iov_len = len;
@@ -173,9 +174,9 @@ xnet_srx_recvv(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 	}
 
 	recv_entry->ctrl_flags = srx->op_flags & FI_MULTI_RECV;
-	recv_entry->cq_flags = FI_MSG | FI_RECV;
-	recv_entry->context = context;
-	recv_entry->iov_cnt = count;
+	recv_entry->entry.flags = FI_MSG | FI_RECV;
+	recv_entry->entry.context = context;
+	recv_entry->entry.count = count;
 	if (count) {
 		recv_entry->user_buf = iov[0].iov_base;
 		memcpy(&recv_entry->iov[0], iov, count * sizeof(*iov));
@@ -211,14 +212,14 @@ static int xnet_check_match(const union xnet_hdrs *hdr,
 	cur_tag = (hdr->base_hdr.flags & XNET_REMOTE_CQ_DATA) ?
 		  hdr->tag_data_hdr.tag : hdr->tag_hdr.tag;
 
-	return ofi_match_tag(recv_entry->tag, recv_entry->ignore, cur_tag);
+	return ofi_match_tag(recv_entry->entry.tag, recv_entry->ignore, cur_tag);
 }
 
 static int xnet_match_msg(const void *claim_ctx, const union xnet_hdrs *hdr,
 			  const struct xnet_xfer_entry *recv_entry)
 {
 	if (recv_entry->ctrl_flags & XNET_CLAIM_RECV) {
-		return (recv_entry->context == claim_ctx) &&
+		return (recv_entry->entry.context == claim_ctx) &&
 			xnet_check_match(hdr, recv_entry);
 	} else {
 		return !claim_ctx && xnet_check_match(hdr, recv_entry);
@@ -244,7 +245,7 @@ xnet_match_saved(struct xnet_progress *progress, struct xnet_saved_msg *saved_ms
 
 	slist_foreach(&saved_msg->queue, item, prev) {
 		saved_entry = container_of(item, struct xnet_xfer_entry, entry);
-		if (xnet_match_msg(saved_entry->context, &saved_entry->hdr,
+		if (xnet_match_msg(saved_entry->entry.context, &saved_entry->hdr,
 				   rx_entry)) {
 			if (remove) {
 				slist_remove(&saved_msg->queue, item, prev);
@@ -294,7 +295,7 @@ xnet_find_msg(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 
 	*ep = NULL;
 	if ((srx->match_tag_rx == xnet_match_tag) ||
-	    (recv_entry->src_addr == FI_ADDR_UNSPEC)) {
+	    (recv_entry->entry.addr == FI_ADDR_UNSPEC)) {
 		*saved_entry = xnet_search_saved(progress, recv_entry, remove);
 		if (*saved_entry) {
 			if (remove)
@@ -310,7 +311,7 @@ xnet_find_msg(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 		*ep = container_of(entry, struct xnet_ep, unexp_entry);
 	} else {
 		*saved_entry = NULL;
-		saved_msg = ofi_array_at(&srx->saved_msgs, recv_entry->src_addr);
+		saved_msg = ofi_array_at(&srx->saved_msgs, recv_entry->entry.addr);
 		if (saved_msg && saved_msg->cnt) {
 			*saved_entry = xnet_match_saved(progress, saved_msg,
 							recv_entry, remove);
@@ -321,7 +322,7 @@ xnet_find_msg(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 			}
 		}
 
-		*ep = xnet_get_rx_ep(srx->rdm, recv_entry->src_addr);
+		*ep = xnet_get_rx_ep(srx->rdm, recv_entry->entry.addr);
 		if (!*ep)
 			return false;
 
@@ -365,7 +366,7 @@ xnet_srx_claim(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 			if (ret)
 				return ret;
 		} else {
-			recv_entry->iov_cnt = 0;
+			recv_entry->entry.count = 0;
 		}
 	}
 
@@ -401,19 +402,19 @@ xnet_srx_peek(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 
 	if (saved_entry) {
 		hdr = &saved_entry->hdr;
-		recv_entry->cq_flags |= saved_entry->cq_flags;
+		recv_entry->entry.flags |= saved_entry->entry.flags;
 	} else {
 		hdr = &ep->cur_rx.hdr;
-		recv_entry->cq_flags |= xnet_rx_completion_flag(ep);
+		recv_entry->entry.flags |= xnet_rx_completion_flag(ep);
 	}
 	memcpy(&recv_entry->hdr, hdr, (size_t) hdr->base_hdr.hdr_size);
 
 	if (flags & (FI_CLAIM | FI_DISCARD)) {
 		FI_DBG(&xnet_prov, FI_LOG_EP_DATA, "Marking message for Claim\n");
 		if (saved_entry)
-			saved_entry->context = recv_entry->context;
+			saved_entry->entry.context = recv_entry->entry.context;
 		else
-			ep->cur_rx.claim_ctx = recv_entry->context;
+			ep->cur_rx.claim_ctx = recv_entry->entry.context;
 	}
 
 	if (flags & FI_DISCARD) {
@@ -429,9 +430,9 @@ xnet_srx_peek(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 
 nomatch:
 	memset(&err_entry, 0, sizeof(err_entry));
-	err_entry.op_context = recv_entry->context;
+	err_entry.op_context = recv_entry->entry.context;
 	err_entry.flags = FI_RECV | FI_TAGGED;
-	err_entry.tag = recv_entry->tag;
+	err_entry.tag = recv_entry->entry.tag;
 	err_entry.err = ret;
 	ofi_cq_write_error(&srx->cq->util_cq, &err_entry);
 	xnet_free_xfer(xnet_srx2_progress(srx), recv_entry);
@@ -464,7 +465,7 @@ xnet_srx_tag(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 	recv_entry->tag_seq_no = srx->tag_seq_no++;
 
 	if ((srx->match_tag_rx == xnet_match_tag) ||
-	    (recv_entry->src_addr == FI_ADDR_UNSPEC)) {
+	    (recv_entry->entry.addr == FI_ADDR_UNSPEC)) {
 		saved_entry = xnet_search_saved(progress, recv_entry, true);
 		if (saved_entry) {
 			xnet_prof_unexp_msg(srx->profile, -1);
@@ -472,13 +473,14 @@ xnet_srx_tag(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 			return 0;
 		}
 
-		slist_insert_tail(&recv_entry->entry, &srx->tag_queue);
+		slist_insert_tail((struct slist_entry*)&recv_entry->entry,
+				  &srx->tag_queue);
 
 		/* The message could match any endpoint waiting. */
 		if (!dlist_empty(&progress->unexp_tag_list))
 			xnet_progress_unexp(progress, &progress->unexp_tag_list);
 	} else {
-		saved_msg = ofi_array_at(&srx->saved_msgs, recv_entry->src_addr);
+		saved_msg = ofi_array_at(&srx->saved_msgs, recv_entry->entry.addr);
 		if (saved_msg && saved_msg->cnt) {
 			saved_entry = xnet_match_saved(progress, saved_msg,
 						       recv_entry, true);
@@ -489,22 +491,25 @@ xnet_srx_tag(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 			}
 		}
 
-		queue = ofi_array_at(&srx->src_tag_queues, recv_entry->src_addr);
+		queue = ofi_array_at(&srx->src_tag_queues, recv_entry->entry.addr);
 		if (!queue)
 			return -FI_EAGAIN;
 
-		ep = xnet_get_rx_ep(srx->rdm, recv_entry->src_addr);
+		ep = xnet_get_rx_ep(srx->rdm, recv_entry->entry.addr);
 		if (!ep) {
-			slist_insert_tail(&recv_entry->entry, queue);
+			slist_insert_tail((struct slist_entry*)&recv_entry->entry,
+					  queue);
 			return 0;
 		}
 
 		if (xnet_has_unexp(ep)) {
 			assert(!dlist_empty(&ep->unexp_entry));
-			slist_insert_tail(&recv_entry->entry, queue);
+			slist_insert_tail((struct slist_entry*)&recv_entry->entry,
+					  queue);
 			xnet_progress_rx(ep);
 		} else {
-			slist_insert_tail(&recv_entry->entry, queue);
+			slist_insert_tail((struct slist_entry*)&recv_entry->entry,
+					  queue);
 		}
 	}
 
@@ -529,13 +534,13 @@ xnet_srx_trecvmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged *msg,
 		goto unlock;
 	}
 
-	recv_entry->tag = msg->tag;
+	recv_entry->entry.tag = msg->tag;
 	recv_entry->ignore = msg->ignore;
-	recv_entry->src_addr = msg->addr;
-	recv_entry->cq_flags = (flags & FI_COMPLETION) | FI_TAGGED | FI_RECV;
+	recv_entry->entry.addr = msg->addr;
+	recv_entry->entry.flags = (flags & FI_COMPLETION) | FI_TAGGED | FI_RECV;
 	recv_entry->cq = srx->cq;
-	recv_entry->context = msg->context;
-	recv_entry->iov_cnt = msg->iov_count;
+	recv_entry->entry.context = msg->context;
+	recv_entry->entry.count = msg->iov_count;
 	if (msg->iov_count) {
 		recv_entry->user_buf = msg->msg_iov[0].iov_base;
 		memcpy(&recv_entry->iov[0], msg->msg_iov,
@@ -575,13 +580,13 @@ xnet_srx_trecv(struct fid_ep *ep_fid, void *buf, size_t len, void *desc,
 		goto unlock;
 	}
 
-	recv_entry->tag = tag;
+	recv_entry->entry.tag = tag;
 	recv_entry->ignore = ignore;
-	recv_entry->src_addr = src_addr;
-	recv_entry->cq_flags = FI_TAGGED | FI_RECV;
-	recv_entry->context = context;
+	recv_entry->entry.addr = src_addr;
+	recv_entry->entry.flags = FI_TAGGED | FI_RECV;
+	recv_entry->entry.context = context;
 	recv_entry->user_buf = buf;
-	recv_entry->iov_cnt = 1;
+	recv_entry->entry.count = 1;
 	recv_entry->iov[0].iov_base = buf;
 	recv_entry->iov[0].iov_len = len;
 
@@ -612,13 +617,13 @@ xnet_srx_trecvv(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 		goto unlock;
 	}
 
-	recv_entry->tag = tag;
+	recv_entry->entry.tag = tag;
 	recv_entry->ignore = ignore;
-	recv_entry->src_addr = src_addr;
-	recv_entry->cq_flags = FI_TAGGED | FI_RECV;
-	recv_entry->context = context;
+	recv_entry->entry.addr = src_addr;
+	recv_entry->entry.flags = FI_TAGGED | FI_RECV;
+	recv_entry->entry.context = context;
 
-	recv_entry->iov_cnt = count;
+	recv_entry->entry.count = count;
 	if (count) {
 		recv_entry->user_buf = iov[0].iov_base;
 		memcpy(&recv_entry->iov[0], iov, count * sizeof(*iov));
@@ -654,7 +659,7 @@ xnet_match_tag(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
 	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
 	slist_foreach(&srx->tag_queue, item, prev) {
 		rx_entry = container_of(item, struct xnet_xfer_entry, entry);
-		if (ofi_match_tag(rx_entry->tag, rx_entry->ignore, tag)) {
+		if (ofi_match_tag(rx_entry->entry.tag, rx_entry->ignore, tag)) {
 			slist_remove(&srx->tag_queue, item, prev);
 			return rx_entry;
 		}
@@ -684,7 +689,7 @@ xnet_match_tag_addr(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
 
 	slist_foreach(queue, item, prev) {
 		rx_entry = container_of(item, struct xnet_xfer_entry, entry);
-		if (ofi_match_tag(rx_entry->tag, rx_entry->ignore, tag))
+		if (ofi_match_tag(rx_entry->entry.tag, rx_entry->ignore, tag))
 			goto found;
 	}
 
@@ -699,7 +704,7 @@ found:
 		if (any_entry->tag_seq_no > rx_entry->tag_seq_no)
 			break;
 
-		if (ofi_match_tag(any_entry->tag, any_entry->ignore, tag)) {
+		if (ofi_match_tag(any_entry->entry.tag, any_entry->ignore, tag)) {
 			queue = &srx->tag_queue;
 			rx_entry = any_entry;
 			item = any_item;
@@ -721,7 +726,7 @@ xnet_srx_cancel_rx(struct xnet_srx *srx, struct slist *queue, void *context)
 	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
 	slist_foreach(queue, cur, prev) {
 		xfer_entry = container_of(cur, struct xnet_xfer_entry, entry);
-		if (xfer_entry->context == context) {
+		if (xfer_entry->entry.context == context) {
 			slist_remove(queue, cur, prev);
 			xnet_report_error(xfer_entry, FI_ECANCELED);
 			xnet_free_xfer(xnet_srx2_progress(srx), xfer_entry);

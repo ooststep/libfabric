@@ -99,7 +99,7 @@ xnet_init_tx_inject(struct xnet_xfer_entry *tx_entry, size_t hdr_len,
 	memcpy((uint8_t *) &tx_entry->hdr + hdr_len, (uint8_t *) buf,
 		data_len);
 	tx_entry->iov[0].iov_len = hdr_len + data_len;
-	tx_entry->iov_cnt = 1;
+	tx_entry->entry.count = 1;
 }
 
 static inline void
@@ -117,7 +117,7 @@ xnet_init_tx_buf(struct xnet_xfer_entry *tx_entry, size_t hdr_len,
 	tx_entry->user_buf = (void *) buf;
 	tx_entry->iov[1].iov_base = (void *) buf;
 	tx_entry->iov[1].iov_len = data_len;
-	tx_entry->iov_cnt = 2;
+	tx_entry->entry.count = 2;
 }
 
 static inline void
@@ -135,10 +135,10 @@ xnet_init_tx_iov(struct xnet_xfer_entry *tx_entry, size_t hdr_len,
 		ofi_copy_iov_buf(iov, count, 0, (uint8_t *) &tx_entry->hdr +
 				 hdr_len, xnet_max_inject, OFI_COPY_IOV_TO_BUF);
 		tx_entry->iov[0].iov_len = hdr_len + data_len;
-		tx_entry->iov_cnt = 1;
+		tx_entry->entry.count = 1;
 	} else {
 		tx_entry->iov[0].iov_len = hdr_len;
-		tx_entry->iov_cnt = count + 1;
+		tx_entry->entry.count = count + 1;
 		if (count) {
 			tx_entry->user_buf = iov[0].iov_base;
 			memcpy(&tx_entry->iov[1], &iov[0],
@@ -165,7 +165,7 @@ xnet_rts_check(struct xnet_ep *ep, struct xnet_xfer_entry *tx_entry)
 		return 0;
 
 	/* User data is iov[1+] */
-	assert(tx_entry->iov_cnt > 1);
+	assert(tx_entry->entry.count > 1);
 	assert(tx_entry->iov[0].iov_len == tx_entry->hdr.base_hdr.hdr_size);
 
 	rts_ctx = ofi_byte_idx_insert(&ep->rts_queue, tx_entry);
@@ -182,8 +182,8 @@ xnet_rts_check(struct xnet_ep *ep, struct xnet_xfer_entry *tx_entry)
 	tx_entry->hdr.base_hdr.size = tx_entry->hdr.base_hdr.hdr_size;
 
 	tx_entry->iov[0].iov_len = tx_entry->hdr.base_hdr.size;
-	tx_entry->rts_iov_cnt = tx_entry->iov_cnt;
-	tx_entry->iov_cnt = 1;
+	tx_entry->rts_iov_cnt = tx_entry->entry.count;
+	tx_entry->entry.count = 1;
 	tx_entry->ctrl_flags |= XNET_NEED_CTS;
 	return 0;
 }
@@ -196,7 +196,8 @@ xnet_queue_recv(struct xnet_ep *ep, struct xnet_xfer_entry *recv_entry)
 	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
 	ret = ep->rx_avail;
 	if (ret) {
-		slist_insert_tail(&recv_entry->entry, &ep->rx_queue);
+		slist_insert_tail((struct slist_entry*)&recv_entry->entry,
+				  &ep->rx_queue);
 		ep->rx_avail--;
 
 		if (xnet_has_unexp(ep)) {
@@ -225,15 +226,15 @@ xnet_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg, uint64_t flags)
 		goto unlock;
 	}
 
-	recv_entry->iov_cnt = msg->iov_count;
+	recv_entry->entry.count = msg->iov_count;
 	if (msg->iov_count) {
 		recv_entry->user_buf = msg->msg_iov[0].iov_base;
 		memcpy(&recv_entry->iov[0], &msg->msg_iov[0],
 		       msg->iov_count * sizeof(struct iovec));
 	}
 
-	recv_entry->cq_flags = (flags & FI_COMPLETION) | FI_MSG | FI_RECV;
-	recv_entry->context = msg->context;
+	recv_entry->entry.flags = (flags & FI_COMPLETION) | FI_MSG | FI_RECV;
+	recv_entry->entry.context = msg->context;
 
 	if (!xnet_queue_recv(ep, recv_entry)) {
 		xnet_free_xfer(xnet_ep2_progress(ep), recv_entry);
@@ -262,12 +263,12 @@ xnet_recv(struct fid_ep *ep_fid, void *buf, size_t len, void *desc,
 	}
 
 	recv_entry->user_buf = buf;
-	recv_entry->iov_cnt = 1;
+	recv_entry->entry.count = 1;
 	recv_entry->iov[0].iov_base = buf;
 	recv_entry->iov[0].iov_len = len;
 
-	recv_entry->cq_flags = FI_MSG | FI_RECV;
-	recv_entry->context = context;
+	recv_entry->entry.flags = FI_MSG | FI_RECV;
+	recv_entry->entry.context = context;
 
 	if (!xnet_queue_recv(ep, recv_entry)) {
 		xnet_free_xfer(xnet_ep2_progress(ep), recv_entry);
@@ -297,13 +298,13 @@ xnet_recvv(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 		goto unlock;
 	}
 
-	recv_entry->iov_cnt = count;
+	recv_entry->entry.count = count;
 	if (count) {
 		recv_entry->user_buf = iov[0].iov_base;
 		memcpy(recv_entry->iov, iov, count * sizeof(*iov));
 	}
-	recv_entry->cq_flags = FI_MSG | FI_RECV;
-	recv_entry->context = context;
+	recv_entry->entry.flags = FI_MSG | FI_RECV;
+	recv_entry->entry.context = context;
 
 	if (!xnet_queue_recv(ep, recv_entry)) {
 		xnet_free_xfer(xnet_ep2_progress(ep), recv_entry);
@@ -340,10 +341,10 @@ xnet_sendmsg(struct fid_ep *ep_fid, const struct fi_msg *msg, uint64_t flags)
 	}
 
 	xnet_init_tx_iov(tx_entry, hdr_len, msg->msg_iov, msg->iov_count);
-	tx_entry->cq_flags = xnet_tx_completion_get_msgflags(ep, flags) |
+	tx_entry->entry.flags = xnet_tx_completion_get_msgflags(ep, flags) |
 			     FI_MSG | FI_SEND;
 	xnet_set_ack_flags(tx_entry, flags);
-	tx_entry->context = msg->context;
+	tx_entry->entry.context = msg->context;
 
 	xnet_tx_queue_insert(ep, tx_entry);
 unlock:
@@ -369,8 +370,8 @@ xnet_send(struct fid_ep *ep_fid, const void *buf, size_t len,
 	}
 
 	xnet_init_tx_buf(tx_entry, sizeof(tx_entry->hdr.base_hdr), buf, len);
-	tx_entry->context = context;
-	tx_entry->cq_flags = xnet_tx_completion_get_opflags(ep) |
+	tx_entry->entry.context = context;
+	tx_entry->entry.flags = xnet_tx_completion_get_opflags(ep) |
 			     FI_MSG | FI_SEND;
 	xnet_set_ack_flags(tx_entry, ep->util_ep.tx_op_flags);
 
@@ -398,8 +399,8 @@ xnet_sendv(struct fid_ep *ep_fid, const struct iovec *iov,
 	}
 
 	xnet_init_tx_iov(tx_entry, sizeof(tx_entry->hdr.base_hdr), iov, count);
-	tx_entry->context = context;
-	tx_entry->cq_flags = xnet_tx_completion_get_opflags(ep) |
+	tx_entry->entry.context = context;
+	tx_entry->entry.flags = xnet_tx_completion_get_opflags(ep) |
 			     FI_MSG | FI_SEND;
 	xnet_set_ack_flags(tx_entry, ep->util_ep.tx_op_flags);
 
@@ -429,7 +430,7 @@ xnet_inject(struct fid_ep *ep_fid, const void *buf, size_t len,
 
 	xnet_init_tx_inject(tx_entry, sizeof(tx_entry->hdr.base_hdr), buf, len);
 	tx_entry->ctrl_flags = XNET_INJECT_OP;
-	tx_entry->cq_flags = FI_INJECT | FI_MSG | FI_SEND;
+	tx_entry->entry.flags = FI_INJECT | FI_MSG | FI_SEND;
 
 	xnet_tx_queue_insert(ep, tx_entry);
 unlock:
@@ -461,8 +462,8 @@ xnet_senddata(struct fid_ep *ep_fid, const void *buf, size_t len,
 
 	xnet_init_tx_buf(tx_entry, sizeof(tx_entry->hdr.cq_data_hdr),
 			 buf, len);
-	tx_entry->context = context;
-	tx_entry->cq_flags = xnet_tx_completion_get_opflags(ep) |
+	tx_entry->entry.context = context;
+	tx_entry->entry.flags = xnet_tx_completion_get_opflags(ep) |
 			     FI_MSG | FI_SEND;
 	xnet_set_ack_flags(tx_entry, ep->util_ep.tx_op_flags);
 
@@ -495,7 +496,7 @@ xnet_injectdata(struct fid_ep *ep_fid, const void *buf, size_t len,
 	xnet_init_tx_inject(tx_entry, sizeof(tx_entry->hdr.cq_data_hdr),
 			    buf, len);
 	tx_entry->ctrl_flags = XNET_INJECT_OP;
-	tx_entry->cq_flags = FI_INJECT | FI_MSG | FI_SEND;
+	tx_entry->entry.flags = FI_INJECT | FI_MSG | FI_SEND;
 
 	xnet_tx_queue_insert(ep, tx_entry);
 unlock:
@@ -545,10 +546,10 @@ xnet_tsendmsg(struct fid_ep *fid_ep, const struct fi_msg_tagged *msg,
 	}
 
 	xnet_init_tx_iov(tx_entry, hdr_len, msg->msg_iov, msg->iov_count);
-	tx_entry->cq_flags = xnet_tx_completion_get_msgflags(ep, flags) |
+	tx_entry->entry.flags = xnet_tx_completion_get_msgflags(ep, flags) |
 			     FI_TAGGED | FI_SEND;
 	xnet_set_ack_flags(tx_entry, flags);
-	tx_entry->context = msg->context;
+	tx_entry->entry.context = msg->context;
 
 	ret = xnet_rts_check(ep, tx_entry);
 	if (!ret)
@@ -578,8 +579,8 @@ xnet_tsend(struct fid_ep *fid_ep, const void *buf, size_t len,
 	tx_entry->hdr.tag_hdr.tag = tag;
 
 	xnet_init_tx_buf(tx_entry, sizeof(tx_entry->hdr.tag_hdr), buf, len);
-	tx_entry->context = context;
-	tx_entry->cq_flags = xnet_tx_completion_get_opflags(ep) |
+	tx_entry->entry.context = context;
+	tx_entry->entry.flags = xnet_tx_completion_get_opflags(ep) |
 			     FI_TAGGED | FI_SEND;
 	xnet_set_ack_flags(tx_entry, ep->util_ep.tx_op_flags);
 
@@ -611,8 +612,8 @@ xnet_tsendv(struct fid_ep *fid_ep, const struct iovec *iov, void **desc,
 	tx_entry->hdr.tag_hdr.tag = tag;
 
 	xnet_init_tx_iov(tx_entry, sizeof(tx_entry->hdr.tag_hdr), iov, count);
-	tx_entry->context = context;
-	tx_entry->cq_flags = xnet_tx_completion_get_opflags(ep) |
+	tx_entry->entry.context = context;
+	tx_entry->entry.flags = xnet_tx_completion_get_opflags(ep) |
 			     FI_TAGGED | FI_SEND;
 	xnet_set_ack_flags(tx_entry, ep->util_ep.tx_op_flags);
 
@@ -646,7 +647,7 @@ xnet_tinject(struct fid_ep *fid_ep, const void *buf, size_t len,
 
 	xnet_init_tx_inject(tx_entry, sizeof(tx_entry->hdr.tag_hdr), buf, len);
 	tx_entry->ctrl_flags = XNET_INJECT_OP;
-	tx_entry->cq_flags = FI_INJECT | FI_TAGGED | FI_SEND;
+	tx_entry->entry.flags = FI_INJECT | FI_TAGGED | FI_SEND;
 
 	xnet_tx_queue_insert(ep, tx_entry);
 unlock:
@@ -677,8 +678,8 @@ xnet_tsenddata(struct fid_ep *fid_ep, const void *buf, size_t len, void *desc,
 
 	xnet_init_tx_buf(tx_entry, sizeof(tx_entry->hdr.tag_data_hdr),
 			 buf, len);
-	tx_entry->context = context;
-	tx_entry->cq_flags = xnet_tx_completion_get_opflags(ep) |
+	tx_entry->entry.context = context;
+	tx_entry->entry.flags = xnet_tx_completion_get_opflags(ep) |
 			     FI_TAGGED | FI_SEND;
 	xnet_set_ack_flags(tx_entry, ep->util_ep.tx_op_flags);
 
@@ -714,7 +715,7 @@ xnet_tinjectdata(struct fid_ep *fid_ep, const void *buf, size_t len,
 	xnet_init_tx_inject(tx_entry, sizeof(tx_entry->hdr.tag_data_hdr),
 			    buf, len);
 	tx_entry->ctrl_flags = XNET_INJECT_OP;
-	tx_entry->cq_flags = FI_INJECT | FI_TAGGED | FI_SEND;
+	tx_entry->entry.flags = FI_INJECT | FI_TAGGED | FI_SEND;
 
 	xnet_tx_queue_insert(ep, tx_entry);
 unlock:

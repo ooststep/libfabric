@@ -435,26 +435,21 @@ struct xnet_mrecv {
 };
 
 struct xnet_xfer_entry {
-	struct slist_entry	entry;
+	struct fi_peer_rx_entry entry;
 	void			*user_buf;
-	size_t			iov_cnt;
 	struct iovec		iov[XNET_IOV_LIMIT+1];
 	struct xnet_ep		*saving_ep;
 	struct xnet_cq		*cq;
 	struct util_cntr	*cntr;
 	uint64_t		tag_seq_no;
-	uint64_t		tag;
 	union {
 		uint64_t		ignore;
 		size_t			rts_iov_cnt;
 		struct xnet_mrecv	*mrecv;
 	};
-	fi_addr_t		src_addr;
-	uint64_t		cq_flags;
 	uint32_t		ctrl_flags;
 	OFI_DBG_VAR(bool,	inuse)
 	uint32_t		async_index;
-	void			*context;
 	/* For RMA read requests, we track the request response so that
 	 * we don't generate multiple completions for the same operation.
 	 */
@@ -650,11 +645,11 @@ xnet_alloc_xfer(struct xnet_progress *progress)
 	assert(!xfer->inuse);
 	OFI_DBG_SET(xfer->inuse, true);
 	xfer->hdr.base_hdr.flags = 0;
-	xfer->cq_flags = 0;
+	xfer->entry.flags = 0;
 	xfer->cntr = NULL;
 	xfer->cq = NULL;
 	xfer->ctrl_flags = 0;
-	xfer->context = NULL;
+	xfer->entry.context = NULL;
 	xfer->user_buf = NULL;
 	return xfer;
 }
@@ -712,7 +707,8 @@ xnet_alloc_xfer_buf(struct xnet_xfer_entry *xfer, size_t len)
 
 	xfer->iov[0].iov_base = xfer->user_buf;
 	xfer->iov[0].iov_len = len;
-	xfer->iov_cnt = 1;
+	xfer->entry.count = 1;
+	xfer->entry.iov = xfer->iov;
 	xfer->ctrl_flags |= XNET_FREE_BUF;
 	return 0;
 }

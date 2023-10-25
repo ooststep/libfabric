@@ -549,7 +549,7 @@ static void xnet_ep_cancel_rx(struct xnet_ep *ep, void *context)
 	 */
 	slist_foreach(&ep->rx_queue, cur, prev) {
 		xfer_entry = container_of(cur, struct xnet_xfer_entry, entry);
-		if (xfer_entry->context == context) {
+		if (xfer_entry->entry.context == context) {
 			if (ep->cur_rx.entry != xfer_entry)
 				goto found;
 			break;

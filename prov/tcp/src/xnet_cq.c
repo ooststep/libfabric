@@ -136,7 +136,7 @@ void xnet_report_success(struct xnet_xfer_entry *xfer_entry)
 	if (xfer_entry->cntr)
 		ofi_cntr_inc(xfer_entry->cntr);
 
-	if (!(xfer_entry->cq_flags & FI_COMPLETION))
+	if (!(xfer_entry->entry.flags & FI_COMPLETION))
 		return;
 
 	assert(xfer_entry->cq);
@@ -148,7 +148,7 @@ void xnet_report_success(struct xnet_xfer_entry *xfer_entry)
 		return;
 	}
 
-	flags = xfer_entry->cq_flags & ~FI_COMPLETION;
+	flags = xfer_entry->entry.flags & ~FI_COMPLETION;
 	if (flags & FI_RECV) {
 		len = xnet_msg_len(&xfer_entry->hdr);
 		if (xfer_entry->ctrl_flags & XNET_MULTI_RECV &&
@@ -172,11 +172,11 @@ void xnet_report_success(struct xnet_xfer_entry *xfer_entry)
 	}
 
 	if (cq->src) {
-		ofi_cq_write_src(cq, xfer_entry->context, flags, len,
+		ofi_cq_write_src(cq, xfer_entry->entry.context, flags, len,
 				 xfer_entry->user_buf, data, tag,
-				 xfer_entry->src_addr);
+				 xfer_entry->entry.addr);
 	} else {
-		ofi_cq_write(cq, xfer_entry->context, flags, len,
+		ofi_cq_write(cq, xfer_entry->entry.context, flags, len,
 			     xfer_entry->user_buf, data, tag);
 	}
 	if (cq->wait)
@@ -200,7 +200,7 @@ void xnet_report_error(struct xnet_xfer_entry *xfer_entry, int err)
 		return;
 	}
 
-	err_entry.flags = xfer_entry->cq_flags & ~FI_COMPLETION;
+	err_entry.flags = xfer_entry->entry.flags & ~FI_COMPLETION;
 	if (err_entry.flags & FI_RECV) {
 		if (xfer_entry->ctrl_flags & XNET_MULTI_RECV &&
 		    xfer_entry->mrecv) {
@@ -221,7 +221,7 @@ void xnet_report_error(struct xnet_xfer_entry *xfer_entry, int err)
 		err_entry.tag = 0;
 	}
 
-	err_entry.op_context = xfer_entry->context;
+	err_entry.op_context = xfer_entry->entry.context;
 	err_entry.len = 0;
 	err_entry.buf = NULL;
 	err_entry.olen = 0;
