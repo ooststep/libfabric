@@ -216,7 +216,7 @@ struct xnet_srx {
 	bool			dir_recv;
 
 	struct xnet_xfer_entry	*(*match_tag_rx)(struct xnet_srx *srx,
-						 struct xnet_ep *ep,
+						 fi_addr_t fi_addr,
 						 uint64_t tag);
 
 	uint64_t		tag_seq_no;

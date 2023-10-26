@@ -40,7 +40,7 @@
 
 
 static struct xnet_xfer_entry *
-xnet_match_tag(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag);
+xnet_match_tag(struct xnet_srx *srx, fi_addr_t addr, uint64_t tag);
 
 
 /* The rdm ep calls directly through to the srx calls, so we need to use the
@@ -659,7 +659,7 @@ static struct fi_ops_tagged xnet_srx_tag_ops = {
 };
 
 static struct xnet_xfer_entry *
-xnet_match_tag(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
+xnet_match_tag(struct xnet_srx *srx, fi_addr_t addr, uint64_t tag)
 {
 	struct xnet_xfer_entry *rx_entry;
 	struct slist_entry *item, *prev;
@@ -681,7 +681,7 @@ xnet_match_tag(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
  * for this case.
  */
 static struct xnet_xfer_entry *
-xnet_match_tag_addr(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
+xnet_match_tag_addr(struct xnet_srx *srx, fi_addr_t addr, uint64_t tag)
 {
 	struct xnet_xfer_entry *rx_entry, *any_entry;
 	struct slist *queue;
@@ -690,10 +690,10 @@ xnet_match_tag_addr(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
 
 	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
 
-	queue = (ep->peer && ep->peer->fi_addr != FI_ADDR_NOTAVAIL) ?
-		ofi_array_at(&srx->src_trecv_queues, ep->peer->fi_addr) : NULL;
+	queue = (addr != FI_ADDR_NOTAVAIL) ?
+		ofi_array_at(&srx->src_trecv_queues, addr) : NULL;
 	if (!queue)
-		return xnet_match_tag(srx, ep, tag);
+		return xnet_match_tag(srx, addr, tag);
 
 	slist_foreach(queue, item, prev) {
 		rx_entry = container_of(item, struct xnet_xfer_entry, entry);
@@ -701,7 +701,7 @@ xnet_match_tag_addr(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
 			goto found;
 	}
 
-	return xnet_match_tag(srx, ep, tag);
+	return xnet_match_tag(srx, addr, tag);
 
 found:
 	/* We select from the any source queue if it matches and was posted
@@ -902,6 +902,119 @@ static struct fi_ops xnet_srx_fid_ops = {
 	.ops_open = fi_no_ops_open,
 };
 
+struct xnet_xfer_entry *
+xnet_find_rx_entry(struct xnet_srx *srx, fi_addr_t addr, size_t msg_len)
+{
+	struct xnet_xfer_entry *xfer, *any_xfer;
+	struct slist *queue;
+	assert(ofi_genlock_held(xnet_srx2_progress(srx)->active_lock));
+
+	queue = addr == FI_ADDR_UNSPEC ? NULL:
+		ofi_array_at(&srx->src_recv_queues, addr);
+
+	if (!queue || slist_empty(queue)) {
+		if (!slist_empty(&srx->recv_queue)) {
+			xfer = container_of(slist_remove_head(&srx->recv_queue),
+					struct xnet_xfer_entry, entry);
+		} else {
+			xfer = NULL;
+		}
+	} else {
+		xfer = container_of(queue->head, struct xnet_xfer_entry,
+					entry);
+		if (!slist_empty(&srx->recv_queue)) {
+			any_xfer = container_of(&srx->recv_queue.head,
+						struct xnet_xfer_entry, entry);
+			if (any_xfer->tag_seq_no <= xfer->tag_seq_no) {
+				queue = &srx->recv_queue;
+				xfer = any_xfer;
+			}
+		}
+		slist_remove_head(queue);
+	}
+
+	if (xfer && xfer->ctrl_flags & XNET_MULTI_RECV) {
+		xfer = xnet_alter_mrecv(srx, xfer, msg_len);
+		assert(xfer);
+	}
+
+	return xfer;
+}
+
+static int
+xnet_peer_get_msg(struct fid_peer_srx *peer_srx, fi_addr_t addr, size_t size,
+		  struct fi_peer_rx_entry **rx_entry)
+{
+	struct xnet_xfer_entry *xfer;
+	struct xnet_srx *srx = peer_srx->ep_fid.fid.context;
+
+	xfer = xnet_find_rx_entry(srx, addr, size);
+	if (!xfer) {
+		xfer = xnet_alloc_xfer(xnet_srx2_progress(srx));
+		if (!xfer)
+			return -FI_ENOMEM;
+		xfer->entry.addr = addr;
+		xfer->entry.size = size;
+		*rx_entry = &xfer->entry;
+		return -FI_ENOENT;
+	}
+
+	*rx_entry = &xfer->entry;
+	return FI_SUCCESS;
+}
+
+static int
+xnet_peer_get_tag(struct fid_peer_srx *peer_srx, fi_addr_t addr,
+		  int64_t tag, struct fi_peer_rx_entry **rx_entry)
+{
+	struct xnet_xfer_entry *xfer;
+	struct xnet_srx *srx = peer_srx->ep_fid.fid.context;
+
+	xfer = srx->match_tag_rx(srx, addr, tag);
+	if (!xfer) {
+		xfer = xnet_alloc_xfer(xnet_srx2_progress(srx));
+		if (!xfer)
+			return -FI_ENOMEM;
+		xfer->entry.addr = addr;
+		xfer->entry.tag = tag;
+		*rx_entry = &xfer->entry;
+		return -FI_ENOENT;
+	}
+
+	*rx_entry = &xfer->entry;
+
+	return FI_SUCCESS;
+}
+
+static int xnet_peer_queue_msg(struct fi_peer_rx_entry *rx_entry)
+{
+}
+
+static int xnet_peer_queue_tag(struct fi_peer_rx_entry *rx_entry)
+{
+}
+
+static void xnet_peer_free_entry(struct fi_peer_rx_entry *entry)
+{
+}
+
+static void
+xnet_peer_foreach_unspec(struct fid_peer_srx *peer_srx,
+			 fi_addr_t (*get_addr)(struct fi_peer_rx_entry *))
+{
+	struct xnet_srx *srx = peer_srx->ep_fid.fid.context;
+}
+
+static struct fi_ops_srx_owner xnet_srx_owner_ops = {
+	.size = sizeof(struct fi_ops_srx_owner),
+	.get_msg = xnet_peer_get_msg,
+	.get_tag = xnet_peer_get_tag,
+	.queue_msg = xnet_peer_queue_msg,
+	.queue_tag = xnet_peer_queue_tag,
+	.foreach_unspec_addr = xnet_peer_foreach_unspec,
+	.free_entry = xnet_peer_free_entry,
+};
+
 static void xnet_srx_init_slist(struct ofi_dyn_arr *arr, void *item)
 {
 	slist_init((struct slist *) item);
@@ -939,6 +1052,19 @@ int xnet_srx_context(struct fid_domain *domain, struct fi_rx_attr *attr,
 	srx->match_tag_rx = srx->dir_recv ? xnet_match_tag_addr : xnet_match_tag;
 	srx->op_flags = attr->op_flags & FI_MULTI_RECV;
 	srx->min_multi_recv_size = XNET_MIN_MULTI_RECV;
+
+	srx->peer_srx.owner_ops = &xnet_srx_owner_ops;
+	srx->peer_srx.peer_ops = NULL;
+
+	srx->peer_srx.ep_fid.fid.fclass = FI_CLASS_SRX_CTX;
+	srx->peer_srx.ep_fid.fid.context = srx;
+	srx->peer_srx.ep_fid.fid.ops = &xnet_srx_fid_ops;
+	srx->peer_srx.ep_fid.ops = &xnet_srx_ops;
+
+	srx->peer_srx.ep_fid.msg = &xnet_srx_msg_ops;
+	srx->peer_srx.ep_fid.tagged = &xnet_srx_tag_ops;
 	*rx_ep = &srx->rx_fid;
+
+
 	return FI_SUCCESS;
 }

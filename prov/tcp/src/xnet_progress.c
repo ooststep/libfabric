@@ -630,15 +630,15 @@ xnet_pmem_commit(struct xnet_ep *ep, struct xnet_xfer_entry *rx_entry)
 	}
 }
 
-static struct xnet_xfer_entry *
-xnet_alter_mrecv(struct xnet_ep *ep, struct xnet_xfer_entry *xfer,
+struct xnet_xfer_entry *
+xnet_alter_mrecv(struct xnet_srx *srx, struct xnet_xfer_entry *xfer,
 		 size_t msg_len)
 {
 	struct xnet_xfer_entry *recv_entry;
 	size_t left;
 
-	assert(ep->srx);
-	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
+	assert(srx);
+	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
 
 	// // TODO handle somewhere else
 	// // when would this occur?
@@ -648,7 +648,7 @@ xnet_alter_mrecv(struct xnet_ep *ep, struct xnet_xfer_entry *xfer,
 	// }
 
 	/* If we can't repost the remaining buffer, return it to the user. */
-	recv_entry = xnet_alloc_xfer(xnet_ep2_progress(ep));
+	recv_entry = xnet_alloc_xfer(xnet_srx2_progress(srx));
 	if (!recv_entry)
 		return NULL;
 	recv_entry->entry.flags = FI_MSG | FI_RECV;
@@ -656,7 +656,7 @@ xnet_alter_mrecv(struct xnet_ep *ep, struct xnet_xfer_entry *xfer,
 	recv_entry->cq = xfer->cq;
 	recv_entry->entry.context = xfer->entry.context;
 	recv_entry->entry.owner_context = xfer;
-	recv_entry->entry.srx = &ep->srx->peer_srx;
+	recv_entry->entry.srx = &srx->peer_srx;
 	xfer->mrecv_ref_cnt++;
 
 	recv_entry->entry.count = 1;
@@ -673,66 +673,32 @@ xnet_alter_mrecv(struct xnet_ep *ep, struct xnet_xfer_entry *xfer,
 
 	xfer->iov[0].iov_len = left;
 
-	if (left >= ep->srx->min_multi_recv_size &&
+	if (left >= srx->min_multi_recv_size &&
 	    msg_len <= xfer->iov[0].iov_len)
 		slist_insert_head((struct slist_entry*)&xfer->entry,
-				&ep->srx->recv_queue);
+				&srx->recv_queue);
 	return recv_entry;
 }
 
 static struct xnet_xfer_entry *xnet_get_rx_entry(struct xnet_ep *ep)
 {
 	struct xnet_active_rx *msg;
-	struct xnet_xfer_entry *xfer, *any_xfer;
-	struct xnet_srx *srx;
-	struct slist *queue;
 	size_t recv_len;
 
 	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
 	if (ep->srx) {
-		srx = ep->srx;
-
-		queue = ep->peer->fi_addr == FI_ADDR_UNSPEC ? NULL:
-			ofi_array_at(&srx->src_recv_queues, ep->peer->fi_addr);
-
-		if (!queue || slist_empty(queue)) {
-			if (!slist_empty(&srx->recv_queue)) {
-				xfer = container_of(slist_remove_head(&srx->recv_queue),
-						struct xnet_xfer_entry, entry);
-			} else {
-				xfer = NULL;
-			}
-		} else {
-			xfer = container_of(queue->head, struct xnet_xfer_entry,
-					    entry);
-			if (!slist_empty(&srx->recv_queue)) {
-				any_xfer = container_of(&srx->recv_queue.head,
-							struct xnet_xfer_entry, entry);
-				if (any_xfer->tag_seq_no <= xfer->tag_seq_no) {
-					queue = &srx->recv_queue;
-					xfer = any_xfer;
-				}
-			}
-			slist_remove_head(queue);
-		}
-	} else {
-		if (!slist_empty(&ep->rx_queue)) {
-			xfer = container_of(slist_remove_head(&ep->rx_queue),
-					    struct xnet_xfer_entry, entry);
-			ep->rx_avail++;
-		} else {
-			xfer = NULL;
-		}
-	}
-
-	if (xfer && xfer->ctrl_flags & XNET_MULTI_RECV) {
 		msg = &ep->cur_rx;
 		recv_len = msg->hdr.base_hdr.size - msg->hdr.base_hdr.hdr_size;
-		xfer = xnet_alter_mrecv(ep, xfer, recv_len);
-		assert(xfer);
+		return xnet_find_rx_entry(ep->srx, ep->peer->fi_addr, recv_len);
 	}
 
-	return xfer;
+	if (!slist_empty(&ep->rx_queue)) {
+		ep->rx_avail++;
+		return container_of(slist_remove_head(&ep->rx_queue),
+				    struct xnet_xfer_entry, entry);
+	}
+
+	return NULL;
 }
 
 static int xnet_handle_ack(struct xnet_ep *ep)
@@ -836,7 +802,7 @@ static int xnet_handle_tag(struct xnet_ep *ep)
 	tag = (msg->hdr.base_hdr.flags & XNET_REMOTE_CQ_DATA) ?
 	      msg->hdr.tag_data_hdr.tag : msg->hdr.tag_hdr.tag;
 
-	rx_entry = ep->srx->match_tag_rx(ep->srx, ep, tag);
+	rx_entry = ep->srx->match_tag_rx(ep->srx, ep->peer->fi_addr, tag);
 	if (rx_entry)
 		return xnet_start_recv(ep, rx_entry);
 
