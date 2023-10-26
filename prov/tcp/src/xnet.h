@@ -207,10 +207,12 @@ struct xnet_saved_msg {
 struct xnet_srx {
 	struct fid_ep		rx_fid;
 	struct xnet_domain	*domain;
-	struct slist		rx_queue;
-	struct slist		tag_queue;
-	struct ofi_dyn_arr	src_tag_queues;
+	struct slist		recv_queue;
+	struct slist		trecv_queue;
+	struct ofi_dyn_arr	src_recv_queues;
+	struct ofi_dyn_arr	src_trecv_queues;
 	struct ofi_dyn_arr	saved_msgs;
+	bool			dir_recv;
 
 	struct xnet_xfer_entry	*(*match_tag_rx)(struct xnet_srx *srx,
 						 struct xnet_ep *ep,

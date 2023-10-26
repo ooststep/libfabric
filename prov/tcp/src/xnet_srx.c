@@ -70,13 +70,18 @@ xnet_srx_msg(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 {
 	struct xnet_progress *progress;
 	struct xnet_ep *ep;
+	struct slist *queue;
+	fi_addr_t addr;
 
 	progress = xnet_srx2_progress(srx);
 	assert(xnet_progress_locked(progress));
-	/* See comment with xnet_srx_tag(). */
-	slist_insert_tail((struct slist_entry*)&recv_entry->entry,
-			  &srx->rx_queue);
+	recv_entry->tag_seq_no = srx->tag_seq_no++;
 
+	/* See comment with xnet_srx_tag(). */
+	addr = recv_entry->entry.addr;
+	queue = addr == FI_ADDR_UNSPEC ? &srx->recv_queue :
+			ofi_array_at(&srx->src_recv_queues, addr);
+	slist_insert_tail((struct slist_entry*)&recv_entry->entry, queue);
 	if (!dlist_empty(&progress->unexp_msg_list)) {
 		if (recv_entry->ctrl_flags & FI_MULTI_RECV) {
 			xnet_progress_unexp(progress, &progress->unexp_msg_list);
@@ -107,6 +112,7 @@ xnet_srx_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
 		goto unlock;
 	}
 
+	recv_entry->entry.addr = srx->dir_recv ? msg->addr : FI_ADDR_UNSPEC;
 	recv_entry->ctrl_flags = flags & FI_MULTI_RECV;
 	recv_entry->entry.flags = (flags & FI_COMPLETION) | FI_MSG | FI_RECV;
 	recv_entry->entry.context = msg->context;
@@ -141,6 +147,7 @@ xnet_srx_recv(struct fid_ep *ep_fid, void *buf, size_t len, void *desc,
 		goto unlock;
 	}
 
+	recv_entry->entry.addr = srx->dir_recv ? src_addr : FI_ADDR_UNSPEC;
 	recv_entry->ctrl_flags = srx->op_flags & FI_MULTI_RECV;
 	recv_entry->entry.flags = FI_MSG | FI_RECV;
 	recv_entry->entry.context = context;
@@ -173,6 +180,7 @@ xnet_srx_recvv(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 		goto unlock;
 	}
 
+	recv_entry->entry.addr = srx->dir_recv ? src_addr : FI_ADDR_UNSPEC;
 	recv_entry->ctrl_flags = srx->op_flags & FI_MULTI_RECV;
 	recv_entry->entry.flags = FI_MSG | FI_RECV;
 	recv_entry->entry.context = context;
@@ -474,7 +482,7 @@ xnet_srx_tag(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 		}
 
 		slist_insert_tail((struct slist_entry*)&recv_entry->entry,
-				  &srx->tag_queue);
+				  &srx->trecv_queue);
 
 		/* The message could match any endpoint waiting. */
 		if (!dlist_empty(&progress->unexp_tag_list))
@@ -491,7 +499,7 @@ xnet_srx_tag(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 			}
 		}
 
-		queue = ofi_array_at(&srx->src_tag_queues, recv_entry->entry.addr);
+		queue = ofi_array_at(&srx->src_trecv_queues, recv_entry->entry.addr);
 		if (!queue)
 			return -FI_EAGAIN;
 
@@ -657,10 +665,10 @@ xnet_match_tag(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
 	struct slist_entry *item, *prev;
 
 	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
-	slist_foreach(&srx->tag_queue, item, prev) {
+	slist_foreach(&srx->trecv_queue, item, prev) {
 		rx_entry = container_of(item, struct xnet_xfer_entry, entry);
 		if (ofi_match_tag(rx_entry->entry.tag, rx_entry->ignore, tag)) {
-			slist_remove(&srx->tag_queue, item, prev);
+			slist_remove(&srx->trecv_queue, item, prev);
 			return rx_entry;
 		}
 	}
@@ -683,7 +691,7 @@ xnet_match_tag_addr(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
 	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
 
 	queue = (ep->peer && ep->peer->fi_addr != FI_ADDR_NOTAVAIL) ?
-		ofi_array_at(&srx->src_tag_queues, ep->peer->fi_addr) : NULL;
+		ofi_array_at(&srx->src_trecv_queues, ep->peer->fi_addr) : NULL;
 	if (!queue)
 		return xnet_match_tag(srx, ep, tag);
 
@@ -699,13 +707,13 @@ found:
 	/* We select from the any source queue if it matches and was posted
 	 * earlier than our source based match.
 	 */
-	slist_foreach(&srx->tag_queue, any_item, any_prev) {
+	slist_foreach(&srx->trecv_queue, any_item, any_prev) {
 		any_entry = container_of(any_item, struct xnet_xfer_entry, entry);
 		if (any_entry->tag_seq_no > rx_entry->tag_seq_no)
 			break;
 
 		if (ofi_match_tag(any_entry->entry.tag, any_entry->ignore, tag)) {
-			queue = &srx->tag_queue;
+			queue = &srx->trecv_queue;
 			rx_entry = any_entry;
 			item = any_item;
 			prev = any_prev;
@@ -743,7 +751,7 @@ xnet_srx_cancel_src(struct ofi_dyn_arr *arr, void *list, void *context)
 	struct xnet_srx *srx;
 	struct slist *queue = list;
 
-	srx = container_of(arr, struct xnet_srx, src_tag_queues);
+	srx = container_of(arr, struct xnet_srx, src_trecv_queues);
 	return (int) xnet_srx_cancel_rx(srx, queue, context);
 }
 
@@ -754,13 +762,13 @@ static ssize_t xnet_srx_cancel(fid_t fid, void *context)
 	srx = container_of(fid, struct xnet_srx, rx_fid.fid);
 
 	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
-	if (xnet_srx_cancel_rx(srx, &srx->tag_queue, context))
+	if (xnet_srx_cancel_rx(srx, &srx->trecv_queue, context))
 		goto unlock;
 
-	if (xnet_srx_cancel_rx(srx, &srx->rx_queue, context))
+	if (xnet_srx_cancel_rx(srx, &srx->recv_queue, context))
 		goto unlock;
 
-	ofi_array_iter(&srx->src_tag_queues, context, xnet_srx_cancel_src);
+	ofi_array_iter(&srx->src_trecv_queues, context, xnet_srx_cancel_src);
 unlock:
 	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
 
@@ -866,13 +874,15 @@ static int xnet_srx_close(struct fid *fid)
 	srx = container_of(fid, struct xnet_srx, rx_fid.fid);
 
 	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
-	xnet_srx_cleanup(srx, &srx->rx_queue);
-	xnet_srx_cleanup(srx, &srx->tag_queue);
-	ofi_array_iter(&srx->src_tag_queues, srx, xnet_srx_cleanup_queues);
+	xnet_srx_cleanup(srx, &srx->recv_queue);
+	xnet_srx_cleanup(srx, &srx->trecv_queue);
+	ofi_array_iter(&srx->src_recv_queues, srx, xnet_srx_cleanup_queues);
+	ofi_array_iter(&srx->src_trecv_queues, srx, xnet_srx_cleanup_queues);
 	ofi_array_iter(&srx->saved_msgs, srx, xnet_srx_cleanup_saved);
 	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
 
-	ofi_array_destroy(&srx->src_tag_queues);
+	ofi_array_destroy(&srx->src_recv_queues);
+	ofi_array_destroy(&srx->src_trecv_queues);
 	ofi_array_destroy(&srx->saved_msgs);
 
 	if (srx->cntr)
@@ -892,6 +902,11 @@ static struct fi_ops xnet_srx_fid_ops = {
 	.ops_open = fi_no_ops_open,
 };
 
+static void xnet_srx_init_slist(struct ofi_dyn_arr *arr, void *item)
+{
+	slist_init((struct slist *) item);
+}
+
 int xnet_srx_context(struct fid_domain *domain, struct fi_rx_attr *attr,
 		     struct fid_ep **rx_ep, void *context)
 {
@@ -908,17 +923,20 @@ int xnet_srx_context(struct fid_domain *domain, struct fi_rx_attr *attr,
 
 	srx->rx_fid.msg = &xnet_srx_msg_ops;
 	srx->rx_fid.tagged = &xnet_srx_tag_ops;
-	slist_init(&srx->rx_queue);
-	slist_init(&srx->tag_queue);
-	ofi_array_init(&srx->src_tag_queues, sizeof(struct slist), NULL);
+	slist_init(&srx->recv_queue);
+	slist_init(&srx->trecv_queue);
+	ofi_array_init(&srx->src_recv_queues, sizeof(struct slist),
+		       xnet_srx_init_slist);
+	ofi_array_init(&srx->src_trecv_queues, sizeof(struct slist),
+		       xnet_srx_init_slist);
 	ofi_array_init(&srx->saved_msgs, sizeof(struct xnet_saved_msg),
 		       xnet_init_saved_msg);
 
 	srx->domain = container_of(domain, struct xnet_domain,
 				   util_domain.domain_fid);
 	ofi_atomic_inc32(&srx->domain->util_domain.ref);
-	srx->match_tag_rx = (attr->caps & FI_DIRECTED_RECV) ?
-			    xnet_match_tag_addr : xnet_match_tag;
+	srx->dir_recv = attr->caps & FI_DIRECTED_RECV;
+	srx->match_tag_rx = srx->dir_recv ? xnet_match_tag_addr : xnet_match_tag;
 	srx->op_flags = attr->op_flags & FI_MULTI_RECV;
 	srx->min_multi_recv_size = XNET_MIN_MULTI_RECV;
 	*rx_ep = &srx->rx_fid;

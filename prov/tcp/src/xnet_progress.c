@@ -678,7 +678,7 @@ static int xnet_alter_mrecv(struct xnet_ep *ep, struct xnet_xfer_entry *xfer,
 	recv_entry->iov[0].iov_len = left;
 
 	slist_insert_head((struct slist_entry*)&recv_entry->entry,
-			  &ep->srx->rx_queue);
+			  &ep->srx->recv_queue);
 	return 0;
 
 complete:
@@ -689,17 +689,36 @@ complete:
 
 static struct xnet_xfer_entry *xnet_get_rx_entry(struct xnet_ep *ep)
 {
-	struct xnet_xfer_entry *xfer;
+	struct xnet_xfer_entry *xfer, *any_xfer;
 	struct xnet_srx *srx;
+	struct slist *queue;
 
 	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
 	if (ep->srx) {
 		srx = ep->srx;
-		if (!slist_empty(&srx->rx_queue)) {
-			xfer = container_of(slist_remove_head(&srx->rx_queue),
-					    struct xnet_xfer_entry, entry);
+
+		queue = ep->peer->fi_addr == FI_ADDR_UNSPEC ? NULL:
+			ofi_array_at(&srx->src_recv_queues, ep->peer->fi_addr);
+
+		if (!queue || slist_empty(queue)) {
+			if (!slist_empty(&srx->recv_queue)) {
+				xfer = container_of(slist_remove_head(&srx->recv_queue),
+						struct xnet_xfer_entry, entry);
+			} else {
+				xfer = NULL;
+			}
 		} else {
-			xfer = NULL;
+			xfer = container_of(queue->head, struct xnet_xfer_entry,
+					    entry);
+			if (!slist_empty(&srx->recv_queue)) {
+				any_xfer = container_of(&srx->recv_queue.head,
+							struct xnet_xfer_entry, entry);
+				if (any_xfer->tag_seq_no <= xfer->tag_seq_no) {
+					queue = &srx->recv_queue;
+					xfer = any_xfer;
+				}
+			}
+			slist_remove_head(queue);
 		}
 	} else {
 		if (!slist_empty(&ep->rx_queue)) {
