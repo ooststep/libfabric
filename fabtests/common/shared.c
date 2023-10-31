@@ -1428,7 +1428,8 @@ int ft_enable_ep_recv(void)
 	if (ret)
 		return ret;
 
-	if (!ft_check_opts(FT_OPT_SKIP_MSG_ALLOC) &&
+	if (!ft_check_opts(FT_OPT_SKIP_PREPOST_RX) &&
+	    !ft_check_opts(FT_OPT_SKIP_MSG_ALLOC) &&
 	    (fi->caps & (FI_MSG | FI_TAGGED))) {
 		/* Initial receive will get remote address for unconnected EPs */
 		ret = ft_post_rx(ep, MAX(rx_size, FT_MAX_CTRL_MSG), &rx_ctx);
@@ -2086,33 +2087,6 @@ int ft_progress(struct fid_cq *cq, uint64_t total, uint64_t *cq_cntr)
 	}
 	return ret;
 }
-
-#define FT_POST(post_fn, progress_fn, cq, seq, cq_cntr, op_str, ...)		\
-	do {									\
-		int timeout_save;						\
-		int ret, rc;							\
-										\
-		while (1) {							\
-			ret = post_fn(__VA_ARGS__);				\
-			if (!ret)						\
-				break;						\
-										\
-			if (ret != -FI_EAGAIN) {				\
-				FT_PRINTERR(op_str, ret);			\
-				return ret;					\
-			}							\
-										\
-			timeout_save = timeout;					\
-			timeout = 0;						\
-			rc = progress_fn(cq, seq, cq_cntr);			\
-			if (rc && rc != -FI_EAGAIN) {				\
-				FT_ERR("Failed to get " op_str " completion");	\
-				return rc;					\
-			}							\
-			timeout = timeout_save;					\
-		}								\
-		seq++;								\
-	} while (0)
 
 ssize_t ft_post_tx_buf(struct fid_ep *ep, fi_addr_t fi_addr, size_t size,
 		       uint64_t data, void *ctx,

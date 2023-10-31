@@ -227,6 +227,7 @@
     <ClCompile Include="functional\dgram.c" />
     <ClCompile Include="functional\dgram_waitset.c" />
     <ClCompile Include="functional\msg.c" />
+    <ClCompile Include="functional\directed_recv_msg.c" />
     <ClCompile Include="functional\msg_epoll.c" />
     <ClCompile Include="functional\msg_netdir.c" />
     <ClCompile Include="functional\msg_sockets.c" />

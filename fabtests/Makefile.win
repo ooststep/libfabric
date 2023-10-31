@@ -84,7 +84,7 @@ functional: $(outdir)\av_xfer.exe $(outdir)\bw.exe $(outdir)\cm_data.exe $(outdi
 	$(outdir)\rdm_atomic.exe $(outdir)\rdm_multi_client.exe $(outdir)\rdm_rma_event.exe \
 	$(outdir)\rdm_rma_trigger.exe $(outdir)\rdm_shared_av.exe $(outdir)\rdm_tagged_peek.exe \
 	$(outdir)\recv_cancel.exe $(outdir)\scalable_ep.exe $(outdir)\shared_ctx.exe \
-	$(outdir)\unexpected_msg.exe
+	$(outdir)\unexpected_msg.exe $(outdir)\directed_recv_msg.exe
 
 unit: $(outdir)\av_test.exe $(outdir)\cntr_test.exe $(outdir)\cq_test.exe $(outdir)\dom_test.exe \
 	$(outdir)\eq_test.exe $(outdir)\getinfo_test.exe $(outdir)\mr_test.exe
@@ -129,6 +129,8 @@ $(outdir)\dgram.exe: {functional}dgram.c $(basedeps)
 $(outdir)\dgram_waitset.exe: {functional}dgram_waitset.c $(basedeps)
 
 $(outdir)\msg.exe: {functional}msg.c $(basedeps)
+
+$(outdir)\directed_recv_msg.exe: {functional}directed_recv_msg.c $(basedeps)
 
 $(outdir)\msg_epoll.exe: {functional}msg_epoll.c $(basedeps)
 
