@@ -59,7 +59,6 @@ xnet_alloc_srx_xfer(struct xnet_srx *srx)
 	if (xfer) {
 		xfer->cntr = srx->cntr;
 		xfer->cq = srx->cq;
-		xfer->mrecv = NULL;
 	}
 
 	return xfer;
@@ -76,6 +75,7 @@ xnet_srx_msg(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 	progress = xnet_srx2_progress(srx);
 	assert(xnet_progress_locked(progress));
 	recv_entry->tag_seq_no = srx->tag_seq_no++;
+	recv_entry->mrecv_ref_cnt = 0;
 
 	/* See comment with xnet_srx_tag(). */
 	addr = recv_entry->entry.addr;

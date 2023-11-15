@@ -206,6 +206,7 @@ struct xnet_saved_msg {
 
 struct xnet_srx {
 	struct fid_ep		rx_fid;
+	struct fid_peer_srx	peer_srx;
 	struct xnet_domain	*domain;
 	struct slist		recv_queue;
 	struct slist		trecv_queue;
@@ -432,10 +433,6 @@ static inline void xnet_signal_progress(struct xnet_progress *progress)
 #define XNET_NEED_CTS		BIT(11)
 #define XNET_MULTI_RECV		FI_MULTI_RECV /* BIT(16) */
 
-struct xnet_mrecv {
-	size_t			ref_cnt;
-};
-
 struct xnet_xfer_entry {
 	struct fi_peer_rx_entry entry;
 	void			*user_buf;
@@ -447,7 +444,7 @@ struct xnet_xfer_entry {
 	union {
 		uint64_t		ignore;
 		size_t			rts_iov_cnt;
-		struct xnet_mrecv	*mrecv;
+		size_t			mrecv_ref_cnt;
 	};
 	uint32_t		ctrl_flags;
 	OFI_DBG_VAR(bool,	inuse)
@@ -652,6 +649,7 @@ xnet_alloc_xfer(struct xnet_progress *progress)
 	xfer->cq = NULL;
 	xfer->ctrl_flags = 0;
 	xfer->entry.context = NULL;
+	xfer->entry.owner_context = NULL;
 	xfer->user_buf = NULL;
 	return xfer;
 }

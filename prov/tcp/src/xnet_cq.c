@@ -124,6 +124,26 @@ static void xnet_get_cq_info(struct xnet_xfer_entry *entry, uint64_t *flags,
 	}
 }
 
+void check_mrecv_complete(struct xnet_xfer_entry *xfer_entry)
+{
+	struct xnet_srx *srx;
+	struct util_cq *cq = cq = &xfer_entry->cq->util_cq;
+	struct xnet_xfer_entry *owner_entry;
+	if (xfer_entry->entry.owner_context) {
+		owner_entry = xfer_entry->entry.owner_context;
+		srx = container_of(xfer_entry->entry.srx, struct xnet_srx, peer_srx);
+		if (!--owner_entry->mrecv_ref_cnt &&
+		    owner_entry->iov[0].iov_len < srx->min_multi_recv_size) {
+			if (ofi_cq_write(cq, owner_entry->entry.context,
+					 FI_MULTI_RECV, 0, NULL, 0, 0)) {
+				FI_WARN(&xnet_prov, FI_LOG_EP_CTRL,
+					"cannot write MULTI_RECV completion\n");
+			}
+			xnet_free_xfer(xnet_srx2_progress(srx), owner_entry);
+		}
+	}
+}
+
 void xnet_report_success(struct xnet_xfer_entry *xfer_entry)
 {
 	struct util_cq *cq;
@@ -151,14 +171,6 @@ void xnet_report_success(struct xnet_xfer_entry *xfer_entry)
 	flags = xfer_entry->entry.flags & ~FI_COMPLETION;
 	if (flags & FI_RECV) {
 		len = xnet_msg_len(&xfer_entry->hdr);
-		if (xfer_entry->ctrl_flags & XNET_MULTI_RECV &&
-		    xfer_entry->mrecv) {
-			xfer_entry->mrecv->ref_cnt--;
-			if (!xfer_entry->mrecv->ref_cnt) {
-				flags |= FI_MULTI_RECV;
-				free(xfer_entry->mrecv);
-			}
-		}
 		xnet_get_cq_info(xfer_entry, &flags, &data, &tag);
 	} else if (flags & FI_REMOTE_CQ_DATA) {
 		assert(flags & FI_REMOTE_WRITE);
@@ -181,6 +193,8 @@ void xnet_report_success(struct xnet_xfer_entry *xfer_entry)
 	}
 	if (cq->wait)
 		cq->wait->signal(cq->wait);
+
+	check_mrecv_complete(xfer_entry);
 }
 
 void xnet_report_error(struct xnet_xfer_entry *xfer_entry, int err)
@@ -203,11 +217,10 @@ void xnet_report_error(struct xnet_xfer_entry *xfer_entry, int err)
 	err_entry.flags = xfer_entry->entry.flags & ~FI_COMPLETION;
 	if (err_entry.flags & FI_RECV) {
 		if (xfer_entry->ctrl_flags & XNET_MULTI_RECV &&
-		    xfer_entry->mrecv) {
-			xfer_entry->mrecv->ref_cnt--;
-			if (!xfer_entry->mrecv->ref_cnt) {
+		    xfer_entry->mrecv_ref_cnt) {
+			xfer_entry->mrecv_ref_cnt--;
+			if (!xfer_entry->mrecv_ref_cnt) {
 				err_entry.flags |= FI_MULTI_RECV;
-				free(xfer_entry->mrecv);
 			}
 		}
 		xnet_get_cq_info(xfer_entry, &err_entry.flags, &err_entry.data,
@@ -231,6 +244,8 @@ void xnet_report_error(struct xnet_xfer_entry *xfer_entry, int err)
 	err_entry.err_data_size = 0;
 
 	ofi_cq_write_error(&xfer_entry->cq->util_cq, &err_entry);
+
+	check_mrecv_complete(xfer_entry);
 }
 
 static int xnet_cq_control(struct fid *fid, int command, void *arg)

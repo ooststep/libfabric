@@ -630,68 +630,63 @@ xnet_pmem_commit(struct xnet_ep *ep, struct xnet_xfer_entry *rx_entry)
 	}
 }
 
-static int xnet_alter_mrecv(struct xnet_ep *ep, struct xnet_xfer_entry *xfer,
-			    size_t msg_len)
+static struct xnet_xfer_entry *
+xnet_alter_mrecv(struct xnet_ep *ep, struct xnet_xfer_entry *xfer,
+		 size_t msg_len)
 {
 	struct xnet_xfer_entry *recv_entry;
 	size_t left;
-	int ret = FI_SUCCESS;
 
 	assert(ep->srx);
 	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
 
-	if ((msg_len && !xfer->entry.count) ||
-	    (msg_len > xfer->iov[0].iov_len)) {
-		ret = -FI_ETRUNC;
-		goto complete;
-	}
-
-	left = xfer->iov[0].iov_len - msg_len;
-	if (!xfer->entry.count || (left < ep->srx->min_multi_recv_size))
-		goto complete;
+	// // TODO handle somewhere else
+	// // when would this occur?
+	// if ((msg_len && !xfer->entry.count) ||
+	//     (msg_len > xfer->iov[0].iov_len)) {
+	// 	goto complete;
+	// }
 
 	/* If we can't repost the remaining buffer, return it to the user. */
 	recv_entry = xnet_alloc_xfer(xnet_ep2_progress(ep));
 	if (!recv_entry)
-		goto complete;
-
-	if (!xfer->mrecv) {
-		xfer->mrecv = calloc(1, sizeof(struct xnet_mrecv));
-		if (!xfer->mrecv) {
-			xfer->entry.flags |= FI_MULTI_RECV;
-			return FI_SUCCESS;
-		}
-		xfer->mrecv->ref_cnt = 1;
-	}
-
-	recv_entry->ctrl_flags = XNET_MULTI_RECV;
+		return NULL;
 	recv_entry->entry.flags = FI_MSG | FI_RECV;
 	recv_entry->cntr = xfer->cntr;
 	recv_entry->cq = xfer->cq;
 	recv_entry->entry.context = xfer->entry.context;
-	recv_entry->mrecv = xfer->mrecv;
-	recv_entry->mrecv->ref_cnt++;
+	recv_entry->entry.owner_context = xfer;
+	recv_entry->entry.srx = &ep->srx->peer_srx;
+	xfer->mrecv_ref_cnt++;
 
 	recv_entry->entry.count = 1;
-	recv_entry->user_buf =  (char *) xfer->iov[0].iov_base + msg_len;
+	recv_entry->user_buf =  (char *) xfer->iov[0].iov_base;
+	xfer->iov[0].iov_base = (char *) xfer->iov[0].iov_base + msg_len;
 	recv_entry->iov[0].iov_base = recv_entry->user_buf;
-	recv_entry->iov[0].iov_len = left;
 
-	slist_insert_head((struct slist_entry*)&recv_entry->entry,
-			  &ep->srx->recv_queue);
-	return 0;
+	left = xfer->iov[0].iov_len - msg_len;
+	recv_entry->iov[0].iov_len = msg_len;
+	if (msg_len > xfer->iov[0].iov_len) {
+		xfer->iov[0].iov_len = 0;
+		return recv_entry;
+	}
 
-complete:
-	if (!xfer->mrecv)
-		xfer->entry.flags |= FI_MULTI_RECV;
-	return ret;
+	xfer->iov[0].iov_len = left;
+
+	if (left >= ep->srx->min_multi_recv_size &&
+	    msg_len <= xfer->iov[0].iov_len)
+		slist_insert_head((struct slist_entry*)&xfer->entry,
+				&ep->srx->recv_queue);
+	return recv_entry;
 }
 
 static struct xnet_xfer_entry *xnet_get_rx_entry(struct xnet_ep *ep)
 {
+	struct xnet_active_rx *msg;
 	struct xnet_xfer_entry *xfer, *any_xfer;
 	struct xnet_srx *srx;
 	struct slist *queue;
+	size_t recv_len;
 
 	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
 	if (ep->srx) {
@@ -728,6 +723,13 @@ static struct xnet_xfer_entry *xnet_get_rx_entry(struct xnet_ep *ep)
 		} else {
 			xfer = NULL;
 		}
+	}
+
+	if (xfer && xfer->ctrl_flags & XNET_MULTI_RECV) {
+		msg = &ep->cur_rx;
+		recv_len = msg->hdr.base_hdr.size - msg->hdr.base_hdr.hdr_size;
+		xfer = xnet_alter_mrecv(ep, xfer, recv_len);
+		assert(xfer);
 	}
 
 	return xfer;
@@ -774,11 +776,6 @@ int xnet_start_recv(struct xnet_ep *ep, struct xnet_xfer_entry *rx_entry)
 	rx_entry->entry.flags |= xnet_rx_completion_flag(ep);
 	rx_entry->cq = xnet_ep_rx_cq(ep);
 	rx_entry->cntr = ep->util_ep.cntrs[CNTR_RX];
-
-	if (rx_entry->ctrl_flags & XNET_MULTI_RECV) {
-		assert(msg->hdr.base_hdr.op == xnet_op_msg);
-		(void) xnet_alter_mrecv(ep, rx_entry, recv_len);
-	}
 
 	ep->cur_rx.entry = rx_entry;
 	ep->cur_rx.handler = xnet_recv_msg_data;
