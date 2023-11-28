@@ -1877,9 +1877,18 @@ static void xnet_destroy_uring(struct xnet_uring *uring,
 	}
 }
 
+static void xnet_rx_entry_init(struct ofi_bufpool_region *region, void *buf)
+{
+	struct xnet_xfer_entry *xfer = (struct xnet_xfer_entry *) buf;
+
+	xfer->entry.iov = xfer->iov;
+	xfer->entry.desc = NULL;
+}
+
 int xnet_init_progress(struct xnet_progress *progress, struct fi_info *info)
 {
 	int ret;
+	struct ofi_bufpool_attr pool_attr = {0};
 
 	progress->fid.fclass = XNET_CLASS_PROGRESS;
 	progress->auto_progress = false;
@@ -1902,9 +1911,13 @@ int xnet_init_progress(struct xnet_progress *progress, struct fi_info *info)
 	if (ret)
 		goto err2;
 
-	ret = ofi_bufpool_create(&progress->xfer_pool,
-			sizeof(struct xnet_xfer_entry) + xnet_buf_size,
-			16, 0, 1024, 0);
+	pool_attr.size = sizeof(struct xnet_xfer_entry) + xnet_buf_size;
+	pool_attr.alignment = 16;
+	pool_attr.chunk_cnt = 1024,
+	pool_attr.alloc_fn = NULL;
+	pool_attr.free_fn = NULL;
+	pool_attr.init_fn = xnet_rx_entry_init;
+	ret = ofi_bufpool_create_attr(&pool_attr, &progress->xfer_pool);
 	if (ret)
 		goto err3;
 
