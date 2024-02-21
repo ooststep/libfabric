@@ -184,7 +184,7 @@ void xnet_req_done(struct xnet_ep *ep)
 	ssize_t ret;
 
 	FI_DBG(&xnet_prov, FI_LOG_EP_CTRL, "connect request done\n");
-	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
+	assert(xnet_progress_locked(ep->progress));
 
 	ret = xnet_recv_cm_msg(ep->bsock.sock, ep->cm_msg);
 	if (ret == 0)
@@ -216,7 +216,7 @@ void xnet_uring_req_done(struct xnet_ep *ep, int res)
 	ssize_t ret;
 
 	FI_DBG(&xnet_prov, FI_LOG_EP_CTRL, "connect request done\n");
-	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
+	assert(xnet_progress_locked(ep->progress));
 
 	len = sizeof(ep->cm_msg->hdr);
 	if (res < 0)
@@ -238,7 +238,7 @@ void xnet_uring_req_done(struct xnet_ep *ep, int res)
 	}
 
 	ep->pollflags = POLLIN;
-	ret = xnet_uring_pollin_add(xnet_ep2_progress(ep), ep->bsock.sock,
+	ret = xnet_uring_pollin_add(ep->progress, ep->bsock.sock,
 				    false, &ep->bsock.pollin_sockctx);
 	if (ret)
 		goto disable;
@@ -330,7 +330,7 @@ void xnet_connect_done(struct xnet_ep *ep)
 	int status, ret;
 
 	FI_DBG(&xnet_prov, FI_LOG_EP_CTRL, "socket connected, sending req\n");
-	progress = xnet_ep2_progress(ep);
+	progress = ep->progress;
 	assert(xnet_progress_locked(progress));
 
 	len = sizeof(status);

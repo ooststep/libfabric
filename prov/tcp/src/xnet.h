@@ -482,21 +482,6 @@ struct xnet_domain {
 	size_t			rx_size;
 };
 
-static inline struct xnet_progress *xnet_ep2_progress(struct xnet_ep *ep)
-{
-	return ep->progress;
-}
-
-static inline struct xnet_progress *xnet_rdm2_progress(struct xnet_rdm *rdm)
-{
-	return &rdm->srx->progress;
-}
-
-static inline struct xnet_progress *xnet_srx2_progress(struct xnet_srx *srx)
-{
-	return &srx->progress;
-}
-
 struct xnet_cq {
 	struct util_cq		util_cq;
 };
@@ -515,11 +500,6 @@ struct xnet_eq {
 
 	struct dlist_entry	fabric_entry;
 };
-
-static inline struct xnet_progress *xnet_eq2_progress(struct xnet_eq *eq)
-{
-	return &eq->progress;
-}
 
 int xnet_eq_write(struct util_eq *eq, uint32_t event,
 		  const void *buf, size_t len, uint64_t flags);
@@ -666,8 +646,8 @@ xnet_alloc_rx(struct xnet_ep *ep)
 {
 	struct xnet_xfer_entry *xfer;
 
-	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
-	xfer = xnet_alloc_xfer(xnet_ep2_progress(ep));
+	assert(xnet_progress_locked(ep->progress));
+	xfer = xnet_alloc_xfer(ep->progress);
 	if (xfer) {
 		xfer->cntr = ep->util_ep.cntrs[CNTR_RX];
 		xfer->cq = xnet_ep_rx_cq(ep);
@@ -681,8 +661,8 @@ xnet_alloc_tx(struct xnet_ep *ep)
 {
 	struct xnet_xfer_entry *xfer;
 
-	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
-	xfer = xnet_alloc_xfer(xnet_ep2_progress(ep));
+	assert(xnet_progress_locked(ep->progress));
+	xfer = xnet_alloc_xfer(ep->progress);
 	if (xfer) {
 		xfer->hdr.base_hdr.version = XNET_HDR_VERSION;
 		xfer->hdr.base_hdr.op_data = 0;
@@ -714,7 +694,7 @@ xnet_alloc_xfer_buf(struct xnet_xfer_entry *xfer, size_t len)
  */
 static inline bool xnet_has_unexp(struct xnet_ep *ep)
 {
-	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
+	assert(xnet_progress_locked(ep->progress));
 	return ep->cur_rx.handler && !ep->cur_rx.entry;
 }
 

@@ -53,7 +53,7 @@ xnet_alloc_srx_xfer(struct xnet_srx *srx)
 	struct xnet_xfer_entry *xfer;
 	struct xnet_progress *progress;
 
-	progress = xnet_srx2_progress(srx);
+	progress = &srx->progress;
 	assert(xnet_progress_locked(progress));
 	xfer = xnet_alloc_xfer(progress);
 	if (xfer) {
@@ -71,7 +71,7 @@ xnet_srx_msg(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 	struct xnet_progress *progress;
 	struct xnet_ep *ep;
 
-	progress = xnet_srx2_progress(srx);
+	progress = &srx->progress;
 	assert(xnet_progress_locked(progress));
 	/* See comment with xnet_srx_tag(). */
 	slist_insert_tail(&recv_entry->entry, &srx->rx_queue);
@@ -99,7 +99,7 @@ xnet_srx_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
 	assert(msg->iov_count <= XNET_IOV_LIMIT);
 	assert(!(flags & FI_MULTI_RECV) || msg->iov_count == 1);
 
-	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_lock(srx->progress.active_lock);
 	recv_entry = xnet_alloc_srx_xfer(srx);
 	if (!recv_entry) {
 		ret = -FI_EAGAIN;
@@ -118,7 +118,7 @@ xnet_srx_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
 
 	xnet_srx_msg(srx, recv_entry);
 unlock:
-	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_unlock(srx->progress.active_lock);
 	return ret;
 }
 
@@ -133,7 +133,7 @@ xnet_srx_recv(struct fid_ep *ep_fid, void *buf, size_t len, void *desc,
 	srx = container_of(ep_fid, struct xnet_srx, rx_fid);
 
 
-	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_lock(srx->progress.active_lock);
 	recv_entry = xnet_alloc_srx_xfer(srx);
 	if (!recv_entry) {
 		ret = -FI_EAGAIN;
@@ -150,7 +150,7 @@ xnet_srx_recv(struct fid_ep *ep_fid, void *buf, size_t len, void *desc,
 
 	xnet_srx_msg(srx, recv_entry);
 unlock:
-	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_unlock(srx->progress.active_lock);
 	return ret;
 }
 
@@ -165,7 +165,7 @@ xnet_srx_recvv(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 	srx = container_of(ep_fid, struct xnet_srx, rx_fid);
 	assert(count <= XNET_IOV_LIMIT);
 
-	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_lock(srx->progress.active_lock);
 	recv_entry = xnet_alloc_srx_xfer(srx);
 	if (!recv_entry) {
 		ret = -FI_EAGAIN;
@@ -183,7 +183,7 @@ xnet_srx_recvv(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 
 	xnet_srx_msg(srx, recv_entry);
 unlock:
-	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_unlock(srx->progress.active_lock);
 	return ret;
 }
 
@@ -289,7 +289,7 @@ xnet_find_msg(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 	struct xnet_saved_msg *saved_msg;
 	struct dlist_entry *entry;
 
-	progress = xnet_srx2_progress(srx);
+	progress = &srx->progress;
 	assert(xnet_progress_locked(progress));
 
 	*ep = NULL;
@@ -347,7 +347,7 @@ xnet_srx_claim(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 	ssize_t ret;
 	size_t msg_len;
 
-	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
+	assert(xnet_progress_locked(&srx->progress));
 	assert(srx->rdm);
 
 	recv_entry->ctrl_flags |= XNET_CLAIM_RECV;
@@ -393,7 +393,7 @@ xnet_srx_peek(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 	struct fi_cq_err_entry err_entry;
 	ssize_t ret = FI_ENOMSG;
 
-	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
+	assert(xnet_progress_locked(&srx->progress));
 	assert(srx->rdm);
 
 	if (!xnet_find_msg(srx, recv_entry, &ep, &saved_entry, false))
@@ -424,7 +424,7 @@ xnet_srx_peek(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry,
 	}
 
 	xnet_report_success(recv_entry);
-	xnet_free_xfer(xnet_srx2_progress(srx), recv_entry);
+	xnet_free_xfer(&srx->progress, recv_entry);
 	return FI_SUCCESS;
 
 nomatch:
@@ -434,7 +434,7 @@ nomatch:
 	err_entry.tag = recv_entry->tag;
 	err_entry.err = ret;
 	ofi_cq_write_error(&srx->cq->util_cq, &err_entry);
-	xnet_free_xfer(xnet_srx2_progress(srx), recv_entry);
+	xnet_free_xfer(&srx->progress, recv_entry);
 	return FI_SUCCESS;
 }
 
@@ -456,7 +456,7 @@ xnet_srx_tag(struct xnet_srx *srx, struct xnet_xfer_entry *recv_entry)
 	struct xnet_ep *ep;
 	struct slist *queue;
 
-	progress = xnet_srx2_progress(srx);
+	progress = &srx->progress;
 	assert(xnet_progress_locked(progress));
 	assert(srx->rdm);
 
@@ -522,8 +522,8 @@ xnet_srx_trecvmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged *msg,
 	srx = container_of(ep_fid, struct xnet_srx, rx_fid);
 	assert(msg->iov_count <= XNET_IOV_LIMIT);
 
-	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
-	recv_entry = xnet_alloc_xfer(xnet_srx2_progress(srx));
+	ofi_genlock_lock(srx->progress.active_lock);
+	recv_entry = xnet_alloc_xfer(&srx->progress);
 	if (!recv_entry) {
 		ret = -FI_EAGAIN;
 		goto unlock;
@@ -552,9 +552,9 @@ xnet_srx_trecvmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged *msg,
 	ret = (flags & FI_CLAIM) ? xnet_srx_claim(srx, recv_entry, flags) :
 				   xnet_srx_tag(srx, recv_entry);
 	if (ret)
-		xnet_free_xfer(xnet_srx2_progress(srx), recv_entry);
+		xnet_free_xfer(&srx->progress, recv_entry);
 unlock:
-	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_unlock(srx->progress.active_lock);
 	return ret;
 }
 
@@ -568,7 +568,7 @@ xnet_srx_trecv(struct fid_ep *ep_fid, void *buf, size_t len, void *desc,
 
 	srx = container_of(ep_fid, struct xnet_srx, rx_fid);
 
-	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_lock(srx->progress.active_lock);
 	recv_entry = xnet_alloc_srx_xfer(srx);
 	if (!recv_entry) {
 		ret = -FI_EAGAIN;
@@ -587,9 +587,9 @@ xnet_srx_trecv(struct fid_ep *ep_fid, void *buf, size_t len, void *desc,
 
 	ret = xnet_srx_tag(srx, recv_entry);
 	if (ret)
-		xnet_free_xfer(xnet_srx2_progress(srx), recv_entry);
+		xnet_free_xfer(&srx->progress, recv_entry);
 unlock:
-	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_unlock(srx->progress.active_lock);
 	return ret;
 }
 
@@ -605,7 +605,7 @@ xnet_srx_trecvv(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 	srx = container_of(ep_fid, struct xnet_srx, rx_fid);
 	assert(count <= XNET_IOV_LIMIT);
 
-	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_lock(srx->progress.active_lock);
 	recv_entry = xnet_alloc_srx_xfer(srx);
 	if (!recv_entry) {
 		ret = -FI_EAGAIN;
@@ -626,9 +626,9 @@ xnet_srx_trecvv(struct fid_ep *ep_fid, const struct iovec *iov, void **desc,
 
 	ret = xnet_srx_tag(srx, recv_entry);
 	if (ret)
-		xnet_free_xfer(xnet_srx2_progress(srx), recv_entry);
+		xnet_free_xfer(&srx->progress, recv_entry);
 unlock:
-	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_unlock(srx->progress.active_lock);
 	return ret;
 }
 
@@ -651,7 +651,7 @@ xnet_match_tag(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
 	struct xnet_xfer_entry *rx_entry;
 	struct slist_entry *item, *prev;
 
-	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
+	assert(xnet_progress_locked(&srx->progress));
 	slist_foreach(&srx->tag_queue, item, prev) {
 		rx_entry = container_of(item, struct xnet_xfer_entry, entry);
 		if (ofi_match_tag(rx_entry->tag, rx_entry->ignore, tag)) {
@@ -675,7 +675,7 @@ xnet_match_tag_addr(struct xnet_srx *srx, struct xnet_ep *ep, uint64_t tag)
 	struct slist_entry *any_item, *any_prev;
 	struct slist_entry *item, *prev;
 
-	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
+	assert(xnet_progress_locked(&srx->progress));
 
 	queue = (ep->peer && ep->peer->fi_addr != FI_ADDR_NOTAVAIL) ?
 		ofi_array_at(&srx->src_tag_queues, ep->peer->fi_addr) : NULL;
@@ -718,13 +718,13 @@ xnet_srx_cancel_rx(struct xnet_srx *srx, struct slist *queue, void *context)
 	struct slist_entry *cur, *prev;
 	struct xnet_xfer_entry *xfer_entry;
 
-	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
+	assert(xnet_progress_locked(&srx->progress));
 	slist_foreach(queue, cur, prev) {
 		xfer_entry = container_of(cur, struct xnet_xfer_entry, entry);
 		if (xfer_entry->context == context) {
 			slist_remove(queue, cur, prev);
 			xnet_report_error(xfer_entry, FI_ECANCELED);
-			xnet_free_xfer(xnet_srx2_progress(srx), xfer_entry);
+			xnet_free_xfer(&srx->progress, xfer_entry);
 			return true;
 		}
 	}
@@ -748,7 +748,7 @@ static ssize_t xnet_srx_cancel(fid_t fid, void *context)
 
 	srx = container_of(fid, struct xnet_srx, rx_fid.fid);
 
-	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_lock(srx->progress.active_lock);
 	if (xnet_srx_cancel_rx(srx, &srx->tag_queue, context))
 		goto unlock;
 
@@ -757,7 +757,7 @@ static ssize_t xnet_srx_cancel(fid_t fid, void *context)
 
 	ofi_array_iter(&srx->src_tag_queues, context, xnet_srx_cancel_src);
 unlock:
-	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_unlock(srx->progress.active_lock);
 
 	return 0;
 }
@@ -811,13 +811,13 @@ static void xnet_srx_cleanup(struct xnet_srx *srx, struct slist *queue)
 	struct slist_entry *entry;
 	struct xnet_xfer_entry *xfer_entry;
 
-	assert(xnet_progress_locked(xnet_srx2_progress(srx)));
+	assert(xnet_progress_locked(&srx->progress));
 	while (!slist_empty(queue)) {
 		entry = slist_remove_head(queue);
 		xfer_entry = container_of(entry, struct xnet_xfer_entry, entry);
 		if (xfer_entry->cq)
 			xnet_report_error(xfer_entry, FI_ECANCELED);
-		xnet_free_xfer(xnet_srx2_progress(srx), xfer_entry);
+		xnet_free_xfer(&srx->progress, xfer_entry);
 	}
 }
 
@@ -860,12 +860,12 @@ static int xnet_srx_close(struct fid *fid)
 
 	srx = container_of(fid, struct xnet_srx, rx_fid.fid);
 
-	ofi_genlock_lock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_lock(srx->progress.active_lock);
 	xnet_srx_cleanup(srx, &srx->rx_queue);
 	xnet_srx_cleanup(srx, &srx->tag_queue);
 	ofi_array_iter(&srx->src_tag_queues, srx, xnet_srx_cleanup_queues);
 	ofi_array_iter(&srx->saved_msgs, srx, xnet_srx_cleanup_saved);
-	ofi_genlock_unlock(xnet_srx2_progress(srx)->active_lock);
+	ofi_genlock_unlock(srx->progress.active_lock);
 
 	ofi_array_destroy(&srx->src_tag_queues);
 	ofi_array_destroy(&srx->saved_msgs);

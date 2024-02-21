@@ -249,7 +249,7 @@ static int xnet_ep_connect(struct fid_ep *ep_fid, const void *addr,
 		}
 	}
 
-	progress = xnet_ep2_progress(ep);
+	progress = ep->progress;
 	ofi_genlock_lock(&progress->ep_lock);
 	ep->pollflags = POLLOUT;
 	ret = xnet_monitor_ep(progress, ep);
@@ -303,7 +303,7 @@ xnet_ep_accept(struct fid_ep *ep_fid, const void *param, size_t paramlen)
 	ep->state = XNET_CONNECTED;
 	assert(!ofi_bsock_readable(&ep->bsock) && !ep->cur_rx.handler);
 
-	progress = xnet_ep2_progress(ep);
+	progress = ep->progress;
 	ofi_genlock_lock(&progress->ep_lock);
 	ep->pollflags = POLLIN;
 	ret = xnet_monitor_ep(progress, ep);
@@ -369,7 +369,7 @@ static void xnet_ep_flush_all_queues(struct xnet_ep *ep)
 	struct xnet_progress *progress;
 	int ret;
 
-	progress = xnet_ep2_progress(ep);
+	progress = ep->progress;
 	assert(xnet_progress_locked(progress));
 
 	ret = xnet_uring_cancel(progress, &progress->tx_uring,
@@ -398,7 +398,7 @@ static void xnet_ep_flush_all_queues(struct xnet_ep *ep)
 					    ep->cur_tx.entry->hdr.base_hdr.op_data);
 		}
 		xnet_report_error(ep->cur_tx.entry, FI_ECANCELED);
-		xnet_free_xfer(xnet_ep2_progress(ep), ep->cur_tx.entry);
+		xnet_free_xfer(ep->progress, ep->cur_tx.entry);
 		ep->cur_tx.entry = NULL;
 	}
 
@@ -414,7 +414,7 @@ static void xnet_ep_flush_all_queues(struct xnet_ep *ep)
 	if (ep->cur_rx.entry &&
 	    !(ep->cur_rx.entry->ctrl_flags & XNET_SAVED_XFER)) {
 		xnet_report_error(ep->cur_rx.entry, FI_ECANCELED);
-		xnet_free_xfer(xnet_ep2_progress(ep), ep->cur_rx.entry);
+		xnet_free_xfer(ep->progress, ep->cur_rx.entry);
 	}
 	xnet_reset_rx(ep);
 	xnet_flush_xfer_queue(progress, &ep->rx_queue, NULL);
@@ -429,7 +429,7 @@ void xnet_ep_disable(struct xnet_ep *ep, int cm_err, void* err_data,
 	struct fi_eq_err_entry err_entry = {0};
 	int ret;
 
-	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
+	assert(xnet_progress_locked(ep->progress));
 	switch (ep->state) {
 	case XNET_CONNECTING:
 	case XNET_REQ_SENT:
@@ -442,7 +442,7 @@ void xnet_ep_disable(struct xnet_ep *ep, int cm_err, void* err_data,
 	ep->state = XNET_DISCONNECTED;
 	dlist_remove_init(&ep->unexp_entry);
 	if (!xnet_io_uring)
-		xnet_halt_sock(xnet_ep2_progress(ep), ep->bsock.sock);
+		xnet_halt_sock(ep->progress, ep->bsock.sock);
 
 	ret = ofi_shutdown(ep->bsock.sock, SHUT_RDWR);
 	if (ret && ofi_sockerr() != ENOTCONN)
@@ -475,10 +475,10 @@ static int xnet_ep_shutdown(struct fid_ep *ep_fid, uint64_t flags)
 
 	ep = container_of(ep_fid, struct xnet_ep, util_ep.ep_fid);
 
-	ofi_genlock_lock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_lock(&ep->progress->ep_lock);
 	(void) ofi_bsock_flush_sync(&ep->bsock);
 	xnet_ep_disable(ep, 0, NULL, 0);
-	ofi_genlock_unlock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_unlock(&ep->progress->ep_lock);
 
 	return FI_SUCCESS;
 }
@@ -539,7 +539,7 @@ static void xnet_ep_cancel_rx(struct xnet_ep *ep, void *context)
 	struct slist_entry *cur, *prev;
 	struct xnet_xfer_entry *xfer_entry;
 
-	assert(xnet_progress_locked(xnet_ep2_progress(ep)));
+	assert(xnet_progress_locked(ep->progress));
 
 	/* To cancel an active receive, we would need to flush the socket of
 	 * all data associated with that message.  Since some of that data
@@ -562,7 +562,7 @@ found:
 	slist_remove(&ep->rx_queue, cur, prev);
 	ep->rx_avail++;
 	xnet_report_error(xfer_entry, FI_ECANCELED);
-	xnet_free_xfer(xnet_ep2_progress(ep), xfer_entry);
+	xnet_free_xfer(ep->progress, xfer_entry);
 }
 
 /* We currently only support canceling receives, which is the common case.
@@ -575,9 +575,9 @@ static ssize_t xnet_ep_cancel(fid_t fid, void *context)
 
 	ep = container_of(fid, struct xnet_ep, util_ep.ep_fid.fid);
 
-	ofi_genlock_lock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_lock(&ep->progress->ep_lock);
 	xnet_ep_cancel_rx(ep, context);
-	ofi_genlock_unlock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_unlock(&ep->progress->ep_lock);
 
 	return 0;
 }

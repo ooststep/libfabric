@@ -148,7 +148,7 @@ static int xnet_bind_conn(struct xnet_rdm *rdm, struct xnet_ep *ep)
 {
 	int ret;
 
-	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
+	assert(xnet_progress_locked(&rdm->srx->progress));
 
 	ret =  fi_ep_bind(&ep->util_ep.ep_fid, &rdm->srx->rx_fid.fid, 0);
 	if (ret)
@@ -219,7 +219,7 @@ static int xnet_open_conn(struct xnet_conn *conn, struct fi_info *info)
 	struct fid_ep *ep_fid;
 	int ret;
 
-	assert(xnet_progress_locked(xnet_rdm2_progress(conn->rdm)));
+	assert(xnet_progress_locked(&conn->rdm->srx->progress));
 	ret = xnet_endpoint(&conn->rdm->util_ep.domain->domain_fid, info,
 			    &ep_fid, conn);
 	if (ret) {
@@ -255,7 +255,7 @@ static int xnet_rdm_connect(struct xnet_conn *conn)
 	int ret;
 
 	FI_DBG(&xnet_prov, FI_LOG_EP_CTRL, "connecting %p\n", conn);
-	assert(xnet_progress_locked(xnet_rdm2_progress(conn->rdm)));
+	assert(xnet_progress_locked(&conn->rdm->srx->progress));
 
 	info = conn->rdm->pep->info;
 	info->dest_addrlen = info->src_addrlen;
@@ -295,7 +295,7 @@ static void xnet_free_conn(struct xnet_conn *conn)
 	struct rxm_av *av;
 
 	FI_DBG(&xnet_prov, FI_LOG_EP_CTRL, "free conn %p\n", conn);
-	assert(xnet_progress_locked(xnet_rdm2_progress(conn->rdm)));
+	assert(xnet_progress_locked(&conn->rdm->srx->progress));
 
 	if (conn->flags & XNET_CONN_INDEXED)
 		ofi_idm_clear(&conn->rdm->conn_idx_map, conn->peer->index);
@@ -315,7 +315,7 @@ void xnet_freeall_conns(struct xnet_rdm *rdm)
 		return;
 
 	av = container_of(rdm->util_ep.av, struct rxm_av, util_av);
-	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
+	assert(xnet_progress_locked(&rdm->srx->progress));
 
 	/* We can't have more connections than the current number of
 	 * possible peers.
@@ -344,7 +344,7 @@ xnet_alloc_conn(struct xnet_rdm *rdm, struct util_peer_addr *peer)
 	struct xnet_conn *conn;
 	struct rxm_av *av;
 
-	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
+	assert(xnet_progress_locked(&rdm->srx->progress));
 	av = container_of(rdm->util_ep.av, struct rxm_av, util_av);
 	conn = rxm_av_alloc_conn(av);
 	if (!conn) {
@@ -366,7 +366,7 @@ xnet_add_conn(struct xnet_rdm *rdm, struct util_peer_addr *peer)
 {
 	struct xnet_conn *conn;
 
-	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
+	assert(xnet_progress_locked(&rdm->srx->progress));
 	conn = ofi_idm_lookup(&rdm->conn_idx_map, peer->index);
 	if (conn)
 		return conn;
@@ -395,7 +395,7 @@ ssize_t xnet_get_conn(struct xnet_rdm *rdm, fi_addr_t addr,
 	struct util_peer_addr **peer;
 	ssize_t ret;
 
-	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
+	assert(xnet_progress_locked(&rdm->srx->progress));
 	peer = ofi_av_addr_context(rdm->util_ep.av, addr);
 	*conn = xnet_add_conn(rdm, *peer);
 	if (!*conn)
@@ -411,7 +411,7 @@ ssize_t xnet_get_conn(struct xnet_rdm *rdm, fi_addr_t addr,
 		/* Force progress for apps that simply retry sending without
 		 * trying to drive progress in between.
 		 */
-		xnet_run_progress(xnet_rdm2_progress(rdm), false);
+		xnet_run_progress(&rdm->srx->progress, false);
 		return -FI_EAGAIN;
 	}
 
@@ -423,7 +423,7 @@ struct xnet_ep *xnet_get_rx_ep(struct xnet_rdm *rdm, fi_addr_t addr)
 	struct util_peer_addr **peer;
 	struct xnet_conn *conn;
 
-	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
+	assert(xnet_progress_locked(&rdm->srx->progress));
 	peer = ofi_av_addr_context(rdm->util_ep.av, addr);
 	conn = ofi_idm_lookup(&rdm->conn_idx_map, (*peer)->index);
 	if (conn) {

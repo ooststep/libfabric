@@ -58,7 +58,7 @@ int xnet_eq_write(struct util_eq *eq, uint32_t event,
 	}
 
 	assert(rdm->util_ep.ep_fid.fid.fclass == FI_CLASS_EP);
-	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
+	assert(xnet_progress_locked(&rdm->srx->progress));
 	entry = malloc(sizeof(*entry) + len);
 	if (!entry)
 		return -FI_ENOMEM;
@@ -67,7 +67,7 @@ int xnet_eq_write(struct util_eq *eq, uint32_t event,
 	entry->event = event;
 	memcpy(&entry->cm_entry, buf, len);
 	slist_insert_tail(&entry->list_entry,
-			  &xnet_rdm2_progress(rdm)->event_list);
+			  &rdm->srx->progress.event_list);
 	return 0;
 }
 

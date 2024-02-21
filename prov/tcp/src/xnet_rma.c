@@ -120,16 +120,16 @@ xnet_rma_readmsg(struct fid_ep *ep_fid, const struct fi_msg_rma *msg,
 	assert(ofi_total_iov_len(msg->msg_iov, msg->iov_count) ==
 	       ofi_total_rma_iov_len(msg->rma_iov, msg->rma_iov_count));
 
-	ofi_genlock_lock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_lock(&ep->progress->ep_lock);
 	send_entry = xnet_alloc_tx(ep);
 	if (!send_entry) {
 		ret = -FI_EAGAIN;
 		goto unlock;
 	}
 
-	recv_entry = xnet_alloc_xfer(xnet_ep2_progress(ep));
+	recv_entry = xnet_alloc_xfer(ep->progress);
 	if (!recv_entry) {
-		xnet_free_xfer(xnet_ep2_progress(ep), send_entry);
+		xnet_free_xfer(ep->progress, send_entry);
 		ret = -FI_EAGAIN;
 		goto unlock;
 	}
@@ -139,7 +139,7 @@ xnet_rma_readmsg(struct fid_ep *ep_fid, const struct fi_msg_rma *msg,
 	slist_insert_tail(&recv_entry->entry, &ep->rma_read_queue);
 	xnet_tx_queue_insert(ep, send_entry);
 unlock:
-	ofi_genlock_unlock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_unlock(&ep->progress->ep_lock);
 	return ret;
 }
 
@@ -211,7 +211,7 @@ xnet_rma_writemsg(struct fid_ep *ep_fid, const struct fi_msg_rma *msg,
 
 	ep = container_of(ep_fid, struct xnet_ep, util_ep.ep_fid);
 
-	ofi_genlock_lock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_lock(&ep->progress->ep_lock);
 	send_entry = xnet_alloc_tx(ep);
 	if (!send_entry) {
 		ret = -FI_EAGAIN;
@@ -270,7 +270,7 @@ xnet_rma_writemsg(struct fid_ep *ep_fid, const struct fi_msg_rma *msg,
 
 	xnet_tx_queue_insert(ep, send_entry);
 unlock:
-	ofi_genlock_unlock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_unlock(&ep->progress->ep_lock);
 	return ret;
 }
 
@@ -374,7 +374,7 @@ xnet_rma_inject_common(struct fid_ep *ep_fid, const void *buf, size_t len,
 
 	ep = container_of(ep_fid, struct xnet_ep, util_ep.ep_fid);
 
-	ofi_genlock_lock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_lock(&ep->progress->ep_lock);
 	send_entry = xnet_alloc_tx(ep);
 	if (!send_entry) {
 		ret = -FI_EAGAIN;
@@ -413,7 +413,7 @@ xnet_rma_inject_common(struct fid_ep *ep_fid, const void *buf, size_t len,
 	send_entry->cntr = ep->util_ep.cntrs[CNTR_WR];
 	xnet_tx_queue_insert(ep, send_entry);
 unlock:
-	ofi_genlock_unlock(&xnet_ep2_progress(ep)->ep_lock);
+	ofi_genlock_unlock(&ep->progress->ep_lock);
 	return ret;
 }
 
