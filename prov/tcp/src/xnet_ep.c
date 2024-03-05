@@ -589,15 +589,18 @@ static int xnet_ep_close(struct fid *fid)
 
 	ep = container_of(fid, struct xnet_ep, util_ep.ep_fid.fid);
 
-	progress = xnet_ep2_progress(ep);
-	ofi_genlock_lock(&progress->ep_lock);
-	ep->state = XNET_DISCONNECTED;
-	dlist_remove_init(&ep->unexp_entry);
-	if (!xnet_io_uring)
-		xnet_halt_sock(progress, ep->bsock.sock);
+	if (ep->progress) {
+		progress = ep->progress;
+		ofi_genlock_lock(&progress->ep_lock);
+		ep->state = XNET_DISCONNECTED;
+		dlist_remove_init(&ep->unexp_entry);
+		if (!xnet_io_uring)
+			xnet_halt_sock(progress, ep->bsock.sock);
+		xnet_ep_flush_all_queues(ep);
+		ofi_genlock_unlock(&progress->ep_lock);
+	}
+
 	ofi_close_socket(ep->bsock.sock);
-	xnet_ep_flush_all_queues(ep);
-	ofi_genlock_unlock(&progress->ep_lock);
 
 	if (ep->bsock.tx_sockctx.uring_sqe_inuse ||
 	    ep->bsock.rx_sockctx.uring_sqe_inuse ||
@@ -607,7 +610,7 @@ static int xnet_ep_close(struct fid *fid)
 	free(ep->cm_msg);
 	free(ep->addr);
 
-	if (!ep->srx) {
+	if (!ep->srx && ep->progress) {
 		xnet_del_progress(ep->progress);
 		xnet_close_progress(ep->progress);
 		free(ep->progress);

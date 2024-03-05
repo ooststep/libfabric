@@ -740,7 +740,7 @@ int xnet_rdm_ops_open(struct fid *fid, const char *name,
 		      uint64_t flags, void **ops, void *context);
 
 #define XNET_WARN_ERR(subsystem, log_str, err) \
-	FI_WARN(&xnet_prov, subsystem, log_str "%s (%d)\n", \
+	FI_WARN(&xnet_prov, subsystem, log_str " %s (%d)\n", \
 		fi_strerror((int) -(err)), (int) err)
 
 #endif //_XNET_H_

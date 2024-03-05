@@ -93,8 +93,54 @@ static void xnet_close_conn(struct xnet_conn *conn)
 	if (conn->ep->peer)
 		util_put_peer(conn->ep->peer);
 
+	if (conn->ep->util_ep.tx_cq) {
+		fid_list_remove(&conn->ep->util_ep.tx_cq->ep_list,
+				NULL,
+				&conn->ep->util_ep.ep_fid.fid);
+		ofi_atomic_dec32(&conn->ep->util_ep.tx_cq->ref);
+		conn->ep->util_ep.tx_cq = NULL;
+	}
+
+	if (conn->ep->util_ep.rx_cq) {
+		fid_list_remove(&conn->ep->util_ep.rx_cq->ep_list,
+				NULL,
+				&conn->ep->util_ep.ep_fid.fid);
+		ofi_atomic_dec32(&conn->ep->util_ep.rx_cq->ref);
+		conn->ep->util_ep.rx_cq = NULL;
+	}
+
 	fi_close(&conn->ep->util_ep.ep_fid.fid);
 	conn->ep = NULL;
+}
+
+static int xnet_tx_bind(struct xnet_rdm *rdm, struct xnet_ep *ep)
+{
+	struct util_cq *cq = rdm->util_ep.tx_cq;
+	int ret;
+
+	ep->util_ep.tx_cq = cq;
+	ep->util_ep.tx_op_flags |= FI_COMPLETION;
+	ep->util_ep.tx_msg_flags = FI_COMPLETION;
+	ofi_atomic_inc32(&cq->ref);
+
+	ret = fid_list_search(&cq->ep_list, &ep->util_ep.ep_fid.fid);
+
+	return (!ret || (ret == -FI_EALREADY)) ? 0 : ret;
+}
+
+static int xnet_rx_bind(struct xnet_rdm *rdm, struct xnet_ep *ep)
+{
+	struct util_cq *cq = rdm->util_ep.rx_cq;
+	int ret;
+
+	ep->util_ep.rx_cq = cq;
+	ep->util_ep.rx_op_flags |= FI_COMPLETION;
+	ep->util_ep.rx_msg_flags = FI_COMPLETION;
+	ofi_atomic_inc32(&cq->ref);
+
+	ret = fid_list_search(&cq->ep_list, &ep->util_ep.ep_fid.fid);
+
+	return (!ret || (ret == -FI_EALREADY)) ? 0 : ret;
 }
 
 /* MSG EPs under an RDM EP do not write events to the EQ. */
@@ -104,17 +150,15 @@ static int xnet_bind_conn(struct xnet_rdm *rdm, struct xnet_ep *ep)
 
 	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
 
-	ret = fi_ep_bind(&ep->util_ep.ep_fid, &rdm->srx->rx_fid.fid, 0);
+	ret =  fi_ep_bind(&ep->util_ep.ep_fid, &rdm->srx->rx_fid.fid, 0);
 	if (ret)
 		return ret;
 
-	ret = fi_ep_bind(&ep->util_ep.ep_fid,
-			 &rdm->util_ep.rx_cq->cq_fid.fid, FI_RECV);
+	ret = xnet_rx_bind(rdm, ep);
 	if (ret)
 		return ret;
 
-	ret = fi_ep_bind(&ep->util_ep.ep_fid,
-			 &rdm->util_ep.tx_cq->cq_fid.fid, FI_SEND);
+	ret = xnet_tx_bind(rdm, ep);
 	if (ret)
 		return ret;
 
@@ -430,7 +474,7 @@ static void xnet_process_connreq(struct fi_eq_cm_entry *cm_entry)
 
 	assert(cm_entry->fid->fclass == FI_CLASS_PEP);
 	rdm = cm_entry->fid->context;
-	assert(xnet_progress_locked(xnet_rdm2_progress(rdm)));
+	assert(xnet_progress_locked(&rdm->srx->progress));
 	msg = (struct xnet_rdm_cm *) cm_entry->data;
 
 	memcpy(&peer_addr, cm_entry->info->dest_addr,
