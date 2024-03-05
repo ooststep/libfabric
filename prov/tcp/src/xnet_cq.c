@@ -233,19 +233,6 @@ int xnet_cq_wait_try_func(void *arg)
 	return FI_SUCCESS;
 }
 
-void xnet_cq_progress(struct util_cq *cq)
-{
-	struct util_ep *ep;
-	struct fid_list_entry *fid_entry;
-	struct dlist_entry *item;
-
-	dlist_foreach(&cq->ep_list, item) {
-		fid_entry = container_of(item, struct fid_list_entry, entry);
-		ep = container_of(fid_entry->fid, struct util_ep, ep_fid.fid);
-		ep->progress(ep);
-	}
-}
-
 int xnet_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		 struct fid_cq **cq_fid, void *context)
 {
@@ -267,7 +254,7 @@ int xnet_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 	}
 
 	ret = ofi_cq_init(&xnet_prov, domain, attr, &cq->util_cq,
-			  &xnet_cq_progress, context);
+			  &ofi_cq_progress, context);
 	if (ret)
 		goto free_cq;
 

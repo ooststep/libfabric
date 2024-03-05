@@ -704,15 +704,55 @@ free_progress:
 	return ret;
 }
 
+int xnet_ep_bind_cq(struct util_ep *ep, struct util_cq *cq, uint64_t flags)
+{
+	int ret;
+
+	ret = ofi_check_bind_cq_flags(ep, cq, flags);
+	if (ret)
+		return ret;
+
+	if (flags & FI_TRANSMIT) {
+		ep->tx_cq = cq;
+		if (!(flags & FI_SELECTIVE_COMPLETION)) {
+			ep->tx_op_flags |= FI_COMPLETION;
+			ep->tx_msg_flags = FI_COMPLETION;
+		}
+		ofi_atomic_inc32(&cq->ref);
+	}
+
+	if (flags & FI_RECV) {
+		ep->rx_cq = cq;
+		if (!(flags & FI_SELECTIVE_COMPLETION)) {
+			ep->rx_op_flags |= FI_COMPLETION;
+			ep->rx_msg_flags = FI_COMPLETION;
+		}
+		ofi_atomic_inc32(&cq->ref);
+	}
+
+	if (flags & (FI_TRANSMIT | FI_RECV)) {
+		return fid_list_insert(&cq->ep_list,
+				       NULL,
+				       &ep->ep_fid.fid);
+	}
+
+	return FI_SUCCESS;
+}
+
 static int xnet_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 {
 	struct xnet_ep *ep;
 	struct xnet_srx *srx;
+	struct util_cq *cq;
 	int ret;
 
 	ep = container_of(fid, struct xnet_ep, util_ep.ep_fid.fid);
 
 	switch (bfid->fclass) {
+	case FI_CLASS_CQ:
+		cq = container_of(bfid, struct util_cq, cq_fid.fid);
+		ret = xnet_ep_bind_cq(&ep->util_ep, cq, flags);
+		break;
 	case FI_CLASS_SRX_CTX:
 		srx = container_of(bfid, struct xnet_srx, rx_fid.fid);
 		ep->srx = srx;
