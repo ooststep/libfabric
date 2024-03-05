@@ -102,6 +102,7 @@ xnet_get_save_rx(struct xnet_ep *ep, uint64_t tag)
 		return NULL;
 
 	rx_entry->saving_ep = ep;
+	rx_entry->saving_progress = progress;
 	rx_entry->tag = tag;
 	rx_entry->ignore = 0;
 	rx_entry->ctrl_flags = XNET_SAVED_XFER;
@@ -229,7 +230,7 @@ void xnet_complete_saved(struct xnet_xfer_entry *saved_entry, void *msg_data)
 	struct xnet_progress *progress;
 	size_t msg_len, copied;
 
-	progress = saved_entry->saving_ep->progress;
+	progress = saved_entry->saving_progress;
 	assert(xnet_progress_locked(progress));
 
 	msg_len = xnet_msg_len(&saved_entry->hdr);

@@ -446,6 +446,7 @@ struct xnet_xfer_entry {
 	size_t			iov_cnt;
 	struct iovec		iov[XNET_IOV_LIMIT+1];
 	struct xnet_ep		*saving_ep;
+	struct xnet_progress	*saving_progress;
 	struct xnet_cq		*cq;
 	struct util_cntr	*cntr;
 	uint64_t		tag_seq_no;
