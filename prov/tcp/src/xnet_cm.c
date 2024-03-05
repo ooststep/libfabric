@@ -376,7 +376,7 @@ void xnet_accept_sock(struct xnet_pep *pep)
 	conn->fid.fclass = FI_CLASS_CONNREQ;
 	/* TODO: We need to hold a reference on the pep to defer destruction */
 	conn->pep = pep;
-	conn->sockapi = &pep->progress->sockapi;
+	conn->sockapi = &pep->sockapi;
 	ofi_sockctx_init(&conn->rx_sockctx, &conn->fid);
 
 	ret = conn->sockapi->accept(conn->sockapi, pep->sock, NULL, 0,

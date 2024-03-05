@@ -697,7 +697,6 @@ static struct fi_ops_ep xnet_rdm_ep_ops = {
 
 static int xnet_enable_rdm(struct xnet_rdm *rdm)
 {
-	struct xnet_progress *progress;
 	struct fi_info *info;
 	size_t len;
 	int ret;
@@ -710,10 +709,9 @@ static int xnet_enable_rdm(struct xnet_rdm *rdm)
 	}
 	(void) fi_ep_bind(&rdm->srx->rx_fid, &rdm->util_ep.ep_fid.fid,
 			  FI_TAGGED | FI_MSG);
-	progress = xnet_rdm2_progress(rdm);
-	ofi_genlock_lock(&progress->rdm_lock);
+	ofi_genlock_lock(&rdm->srx->progress.rdm_lock);
 
-	ret = xnet_listen(rdm->pep, progress);
+	ret = xnet_listen(rdm->pep, &rdm->srx->progress);
 	if (ret)
 		goto unlock;
 
@@ -744,7 +742,7 @@ static int xnet_enable_rdm(struct xnet_rdm *rdm)
 	ofi_addr_set_port(info->src_addr, 0);
 
 unlock:
-	ofi_genlock_unlock(&progress->rdm_lock);
+	ofi_genlock_unlock(&rdm->srx->progress.rdm_lock);
 	return ret;
 }
 
@@ -863,6 +861,13 @@ err1:
 	return ret;
 }
 
+static void xnet_rdm_progress(struct util_ep *util_ep)
+{
+	struct xnet_rdm *ep;
+	ep = container_of(util_ep, struct xnet_rdm, util_ep);
+	xnet_progress(&ep->srx->progress, false);
+}
+
 int xnet_rdm_ep(struct fid_domain *domain, struct fi_info *info,
 		struct fid_ep **ep_fid, void *context)
 {
@@ -874,7 +879,7 @@ int xnet_rdm_ep(struct fid_domain *domain, struct fi_info *info,
 		return -FI_ENOMEM;
 
 	ret = ofi_endpoint_init(domain, &xnet_util_prov, info, &rdm->util_ep,
-				context, NULL);
+				context, &xnet_rdm_progress);
 	if (ret)
 		goto err1;
 

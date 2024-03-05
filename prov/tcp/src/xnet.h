@@ -106,6 +106,9 @@ extern struct fi_fabric_attr	xnet_fabric_attr;
 extern struct fi_info		xnet_srx_info;
 extern struct xnet_port_range	xnet_ports;
 
+extern struct ofi_sockapi xnet_sockapi_uring;
+extern struct ofi_sockapi xnet_sockapi_socket;
+
 extern int xnet_nodelay;
 extern int xnet_staging_sbuf_size;
 extern int xnet_prefetch_rbuf_size;
@@ -160,6 +163,7 @@ struct xnet_pep {
 	struct util_pep 	util_pep;
 	struct fi_info		*info;
 	struct xnet_progress	*progress;
+	struct ofi_sockapi	sockapi;
 	SOCKET			sock;
 	enum xnet_state		state;
 	struct ofi_sockctx	pollin_sockctx;
@@ -204,30 +208,6 @@ struct xnet_saved_msg {
 	int			cnt;
 };
 
-struct xnet_srx {
-	struct fid_ep		rx_fid;
-	struct xnet_domain	*domain;
-	struct slist		rx_queue;
-	struct slist		tag_queue;
-	struct ofi_dyn_arr	src_tag_queues;
-	struct ofi_dyn_arr	saved_msgs;
-
-	struct xnet_xfer_entry	*(*match_tag_rx)(struct xnet_srx *srx,
-						 struct xnet_ep *ep,
-						 uint64_t tag);
-
-	uint64_t		tag_seq_no;
-	uint64_t		op_flags;
-	size_t			min_multi_recv_size;
-
-	/* Internal use when srx is part of rdm endpoint */
-	struct xnet_rdm		*rdm;
-	struct xnet_cq		*cq;
-	struct util_cntr	*cntr;
-
-	xnet_profile_t *profile;
-};
-
 int xnet_srx_context(struct fid_domain *domain, struct fi_rx_attr *attr,
 		     struct fid_ep **rx_ep, void *context);
 
@@ -236,6 +216,7 @@ int xnet_srx_context(struct fid_domain *domain, struct fi_rx_attr *attr,
 
 struct xnet_ep {
 	struct util_ep		util_ep;
+	struct xnet_eq		*eq;
 	struct ofi_bsock	bsock;
 	struct xnet_active_rx	cur_rx;
 	struct xnet_active_tx	cur_tx;
@@ -258,6 +239,7 @@ struct xnet_ep {
 	enum xnet_state		state;
 	struct util_peer_addr	*peer;
 	struct xnet_conn_handle *conn;
+	struct xnet_progress	*progress;
 	struct xnet_cm_msg	*cm_msg;
 	struct sockaddr		*addr;
 
@@ -289,26 +271,6 @@ struct xnet_conn {
 	int			flags;
 };
 
-struct xnet_rdm {
-	struct util_ep		util_ep;
-
-	struct xnet_pep		*pep;
-	struct xnet_srx		*srx;
-
-	struct index_map	conn_idx_map;
-	struct xnet_conn	*rx_loopback;
-	union ofi_sock_ip	addr;
-
-	xnet_profile_t *profile;
-};
-
-int xnet_rdm_ep(struct fid_domain *domain, struct fi_info *info,
-		struct fid_ep **ep_fid, void *context);
-ssize_t xnet_get_conn(struct xnet_rdm *rdm, fi_addr_t dest_addr,
-		      struct xnet_conn **conn);
-struct xnet_ep *xnet_get_rx_ep(struct xnet_rdm *rdm, fi_addr_t addr);
-void xnet_freeall_conns(struct xnet_rdm *rdm);
-
 struct xnet_uring {
 	struct fid fid;
 	ofi_io_uring_t ring;
@@ -325,7 +287,7 @@ struct xnet_uring {
  * accessed, as that's where active sockets reside.  A single domain
  * exports either rdm or msg endpoints to the app, but not both.  If the
  * progress instance is associated with a domain that exports rdm endpoints,
- * then the rdm_lock is active and lock is set to NONE.  Otherwise, lock is
+ * then the rdm_lock is active and ep_lock is set to NONE.  Otherwise, ep_lock is
  * active, and rdm_lock is set to NONE.
  *
  * The reason for the separate locking is to handle nested locking issues
@@ -347,6 +309,7 @@ struct xnet_uring {
  */
 struct xnet_progress {
 	struct fid		fid;
+	struct xnet_domain	*domain;
 	struct ofi_genlock	ep_lock;
 	struct ofi_genlock	rdm_lock;
 	struct ofi_genlock	*active_lock;
@@ -363,8 +326,6 @@ struct xnet_progress {
 	struct xnet_uring	rx_uring;
 	ofi_io_uring_cqe_t	**cqes;
 
-	struct ofi_sockapi	sockapi;
-
 	struct ofi_dynpoll	epoll_fd;
 	struct ofi_epollfds_event events[XNET_MAX_EVENTS];
 
@@ -372,7 +333,52 @@ struct xnet_progress {
 	pthread_t		thread;
 };
 
-int xnet_init_progress(struct xnet_progress *progress, struct fi_info *info);
+struct xnet_rdm {
+	struct util_ep		util_ep;
+
+	struct xnet_pep		*pep;
+	struct xnet_srx		*srx;
+
+	struct index_map	conn_idx_map;
+	struct xnet_conn	*rx_loopback;
+	union ofi_sock_ip	addr;
+
+	xnet_profile_t *profile;
+};
+
+int xnet_rdm_ep(struct fid_domain *domain, struct fi_info *info,
+		struct fid_ep **ep_fid, void *context);
+ssize_t xnet_get_conn(struct xnet_rdm *rdm, fi_addr_t dest_addr,
+		      struct xnet_conn **conn);
+struct xnet_ep *xnet_get_rx_ep(struct xnet_rdm *rdm, fi_addr_t addr);
+void xnet_freeall_conns(struct xnet_rdm *rdm);
+
+struct xnet_srx {
+	struct fid_ep		rx_fid;
+	struct xnet_domain	*domain;
+	struct xnet_progress	progress;
+	struct slist		rx_queue;
+	struct slist		tag_queue;
+	struct ofi_dyn_arr	src_tag_queues;
+	struct ofi_dyn_arr	saved_msgs;
+
+	struct xnet_xfer_entry	*(*match_tag_rx)(struct xnet_srx *srx,
+						 struct xnet_ep *ep,
+						 uint64_t tag);
+
+	uint64_t		tag_seq_no;
+	uint64_t		op_flags;
+	size_t			min_multi_recv_size;
+
+	/* Internal use when srx is part of rdm endpoint */
+	struct xnet_rdm		*rdm;
+	struct xnet_cq		*cq;
+	struct util_cntr	*cntr;
+
+	xnet_profile_t *profile;
+};
+
+int xnet_init_progress(struct xnet_progress *progress, struct xnet_domain *domain);
 void xnet_close_progress(struct xnet_progress *progress);
 int xnet_start_progress(struct xnet_progress *progress);
 void xnet_stop_progress(struct xnet_progress *progress);
@@ -468,61 +474,43 @@ struct xnet_xfer_entry {
 };
 
 struct xnet_domain {
-	struct util_domain		util_domain;
-	struct xnet_progress		progress;
-	enum fi_ep_type			ep_type;
+	struct util_domain	util_domain;
+	struct ofi_sockapi	sockapi;
+	enum fi_ep_type		ep_type;
+	size_t			tx_size;
+	size_t			rx_size;
 };
 
 static inline struct xnet_progress *xnet_ep2_progress(struct xnet_ep *ep)
 {
-	struct xnet_domain *domain;
-	domain = container_of(ep->util_ep.domain, struct xnet_domain,
-			      util_domain);
-	return &domain->progress;
+	return ep->progress;
 }
 
 static inline struct xnet_progress *xnet_rdm2_progress(struct xnet_rdm *rdm)
 {
-	struct xnet_domain *domain;
-	domain = container_of(rdm->util_ep.domain, struct xnet_domain,
-			      util_domain);
-	return &domain->progress;
+	return &rdm->srx->progress;
 }
 
 static inline struct xnet_progress *xnet_srx2_progress(struct xnet_srx *srx)
 {
-	return &srx->domain->progress;
+	return &srx->progress;
 }
 
 struct xnet_cq {
 	struct util_cq		util_cq;
 };
 
-static inline struct xnet_progress *xnet_cq2_progress(struct xnet_cq *cq)
-{
-	struct xnet_domain *domain;
-	domain = container_of(cq->util_cq.domain, struct xnet_domain,
-			      util_domain);
-	return &domain->progress;
-}
-
-/* xnet_cntr maps directly to util_cntr */
-
-static inline struct xnet_progress *xnet_cntr2_progress(struct util_cntr *cntr)
-{
-	struct xnet_domain *domain;
-	domain = container_of(cntr->domain, struct xnet_domain, util_domain);
-	return &domain->progress;
-}
+int xnet_cq_wait_try_func(void *arg);
+int xnet_cntr_wait_try_func(void *arg);
 
 struct xnet_eq {
 	struct util_eq		util_eq;
 	struct xnet_progress	progress;
 
 	/* Drive progress on domains that have an EP bound with this EQ */
-	struct dlist_entry	domain_list;
+	struct dlist_entry	progress_list;
 	/* Must acquire before progress->active_lock */
-	ofi_mutex_t		domain_lock;
+	ofi_mutex_t		prog_list_lock;
 
 	struct dlist_entry	fabric_entry;
 };
@@ -590,8 +578,8 @@ void xnet_tx_queue_insert(struct xnet_ep *ep,
 
 int xnet_eq_create(struct fid_fabric *fabric_fid, struct fi_eq_attr *attr,
 		   struct fid_eq **eq_fid, void *context);
-int xnet_add_domain_progress(struct xnet_eq *eq, struct xnet_domain *domain);
-void xnet_del_domain_progress(struct xnet_domain *domain);
+int xnet_eq_add_progress(struct xnet_eq *eq, struct xnet_progress *progress);
+void xnet_del_progress(struct xnet_progress *progress);
 void xnet_progress_all(struct xnet_eq *eq);
 
 static inline void

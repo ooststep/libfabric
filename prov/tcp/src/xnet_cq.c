@@ -37,52 +37,16 @@
 
 #define XNET_DEF_CQ_SIZE (1024)
 
-
-static ssize_t
-xnet_cq_readfrom(struct fid_cq *cq_fid, void *buf, size_t count,
-		 fi_addr_t *src_addr)
-{
-	struct xnet_cq *cq;
-	ssize_t ret;
-
-	cq = container_of(cq_fid, struct xnet_cq, util_cq.cq_fid);
-	ofi_genlock_lock(xnet_cq2_progress(cq)->active_lock);
-	ret = ofi_cq_readfrom(cq_fid, buf, count, src_addr);
-	ofi_genlock_unlock(xnet_cq2_progress(cq)->active_lock);
-	return ret;
-}
-
-static ssize_t
-xnet_cq_readerr(struct fid_cq *cq_fid, struct fi_cq_err_entry *buf,
-		uint64_t flags)
-{
-	struct xnet_cq *cq;
-	ssize_t ret;
-
-	cq = container_of(cq_fid, struct xnet_cq, util_cq.cq_fid);
-	ofi_genlock_lock(xnet_cq2_progress(cq)->active_lock);
-	ret = ofi_cq_readerr(cq_fid, buf, flags);
-	ofi_genlock_unlock(xnet_cq2_progress(cq)->active_lock);
-	return ret;
-}
-
 static struct fi_ops_cq xnet_cq_ops = {
 	.size = sizeof(struct fi_ops_cq),
 	.read = ofi_cq_read,
-	.readfrom = xnet_cq_readfrom,
-	.readerr = xnet_cq_readerr,
+	.readfrom = ofi_cq_readfrom,
+	.readerr = ofi_cq_readerr,
 	.sread = ofi_cq_sread,
 	.sreadfrom = ofi_cq_sreadfrom,
 	.signal = ofi_cq_signal,
 	.strerror = ofi_cq_strerror,
 };
-
-static void xnet_cq_progress(struct util_cq *util_cq)
-{
-	struct xnet_cq *cq;
-	cq = container_of(util_cq, struct xnet_cq, util_cq);
-	xnet_run_progress(xnet_cq2_progress(cq), false);
-}
 
 static int xnet_cq_close(struct fid *fid)
 {
@@ -263,10 +227,23 @@ static struct fi_ops xnet_cq_fi_ops = {
 	.ops_open = fi_no_ops_open,
 };
 
-static int xnet_cq_wait_try_func(void *arg)
+int xnet_cq_wait_try_func(void *arg)
 {
 	OFI_UNUSED(arg);
 	return FI_SUCCESS;
+}
+
+void xnet_cq_progress(struct util_cq *cq)
+{
+	struct util_ep *ep;
+	struct fid_list_entry *fid_entry;
+	struct dlist_entry *item;
+
+	dlist_foreach(&cq->ep_list, item) {
+		fid_entry = container_of(item, struct fid_list_entry, entry);
+		ep = container_of(fid_entry->fid, struct util_ep, ep_fid.fid);
+		ep->progress(ep);
+	}
 }
 
 int xnet_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
@@ -294,31 +271,14 @@ int xnet_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 	if (ret)
 		goto free_cq;
 
-	if (cq->util_cq.wait && ofi_have_epoll) {
-		ret = ofi_wait_add_fd(cq->util_cq.wait,
-			       ofi_dynpoll_get_fd(&xnet_cq2_progress(cq)->epoll_fd),
-			       POLLIN, xnet_cq_wait_try_func, cq,
-			       &cq->util_cq.cq_fid);
-		if (ret)
-			goto cleanup;
-	}
-
 	*cq_fid = &cq->util_cq.cq_fid;
 	(*cq_fid)->fid.ops = &xnet_cq_fi_ops;
 	(*cq_fid)->ops = &xnet_cq_ops;
 	return 0;
 
-cleanup:
-	ofi_cq_cleanup(&cq->util_cq);
 free_cq:
 	free(cq);
 	return ret;
-}
-
-
-static void xnet_cntr_progress(struct util_cntr *cntr)
-{
-	xnet_progress(xnet_cntr2_progress(cntr), false);
 }
 
 void xnet_cntr_incerr(struct xnet_xfer_entry *xfer_entry)
@@ -330,113 +290,7 @@ void xnet_cntr_incerr(struct xnet_xfer_entry *xfer_entry)
 	fi_cntr_adderr(&xfer_entry->cntr->cntr_fid, 1);
 }
 
-static uint64_t xnet_cntr_read(struct fid_cntr *cntr_fid)
-{
-	struct util_cntr *cntr;
-
-	cntr = container_of(cntr_fid, struct util_cntr, cntr_fid);
-	xnet_progress(xnet_cntr2_progress(cntr), false);
-	return ofi_atomic_get64(&cntr->cnt);
-}
-
-static uint64_t xnet_cntr_readerr(struct fid_cntr *cntr_fid)
-{
-	struct util_cntr *cntr;
-
-	cntr = container_of(cntr_fid, struct util_cntr, cntr_fid);
-	xnet_progress(xnet_cntr2_progress(cntr), false);
-	return ofi_atomic_get64(&cntr->err);
-}
-
-static int xnet_cntr_add(struct fid_cntr *cntr_fid, uint64_t value)
-{
-	struct util_cntr *cntr;
-
-	cntr = container_of(cntr_fid, struct util_cntr, cntr_fid);
-	ofi_atomic_add64(&cntr->cnt, value);
-	/* No need to signal, see comment above xnet_cntr_ops */
-	return FI_SUCCESS;
-}
-
-static int xnet_cntr_adderr(struct fid_cntr *cntr_fid, uint64_t value)
-{
-	struct util_cntr *cntr;
-
-	cntr = container_of(cntr_fid, struct util_cntr, cntr_fid);
-	ofi_atomic_add64(&cntr->err, value);
-	/* No need to signal, see comment above xnet_cntr_ops */
-	return FI_SUCCESS;
-}
-
-static int xnet_cntr_set(struct fid_cntr *cntr_fid, uint64_t value)
-{
-	struct util_cntr *cntr;
-
-	cntr = container_of(cntr_fid, struct util_cntr, cntr_fid);
-	ofi_atomic_set64(&cntr->cnt, value);
-	/* No need to signal, see comment above xnet_cntr_ops */
-	return FI_SUCCESS;
-}
-
-static int xnet_cntr_seterr(struct fid_cntr *cntr_fid, uint64_t value)
-{
-	struct util_cntr *cntr;
-
-	cntr = container_of(cntr_fid, struct util_cntr, cntr_fid);
-	ofi_atomic_set64(&cntr->err, value);
-	/* No need to signal, see comment above xnet_cntr_ops */
-	return FI_SUCCESS;
-}
-
-static int
-xnet_cntr_wait(struct fid_cntr *cntr_fid, uint64_t threshold, int timeout)
-{
-	struct util_cntr *cntr;
-	uint64_t endtime, errcnt;
-	int ret;
-
-	cntr = container_of(cntr_fid, struct util_cntr, cntr_fid);
-	errcnt = xnet_cntr_readerr(cntr_fid);
-	endtime = ofi_timeout_time(timeout);
-
-	do {
-		if (threshold <= (uint64_t) ofi_atomic_get64(&cntr->cnt))
-			return FI_SUCCESS;
-
-		if (errcnt != (uint64_t) ofi_atomic_get64(&cntr->err))
-			return -FI_EAVAIL;
-
-		if (ofi_adjust_timeout(endtime, &timeout))
-			return -FI_ETIMEDOUT;
-
-		ret = xnet_progress_wait(xnet_cntr2_progress(cntr), timeout);
-		if (ret < 0)
-			break;
-
-		xnet_progress(xnet_cntr2_progress(cntr), true);
-	} while (true);
-
-	return ret;
-}
-
-/* We use these calls if the app uses a single thread around any access
- * to the counter (e.g. FI_THREAD_DOMAIN).  There should be no other
- * threads updating the counter or waiting for a value in parallel with
- * these calls.
- */
-static struct fi_ops_cntr xnet_cntr_ops = {
-	.size = sizeof(struct fi_ops_cntr),
-	.read = xnet_cntr_read,
-	.readerr = xnet_cntr_readerr,
-	.add = xnet_cntr_add,
-	.adderr = xnet_cntr_adderr,
-	.set = xnet_cntr_set,
-	.seterr = xnet_cntr_seterr,
-	.wait = xnet_cntr_wait
-};
-
-
-static int xnet_cntr_wait_try_func(void *arg)
+int xnet_cntr_wait_try_func(void *arg)
 {
 	OFI_UNUSED(arg);
 	return FI_SUCCESS;
@@ -445,7 +299,6 @@ static int xnet_cntr_wait_try_func(void *arg)
 int xnet_cntr_open(struct fid_domain *fid_domain, struct fi_cntr_attr *attr,
 		   struct fid_cntr **cntr_fid, void *context)
 {
-	struct xnet_progress *progress;
 	struct xnet_domain *domain;
 	struct util_cntr *cntr;
 	struct fi_cntr_attr cntr_attr;
@@ -459,8 +312,7 @@ int xnet_cntr_open(struct fid_domain *fid_domain, struct fi_cntr_attr *attr,
 			      util_domain.domain_fid);
 	if (attr->wait_obj == FI_WAIT_UNSPEC) {
 		cntr_attr = *attr;
-		if (domain->progress.auto_progress ||
-		    domain->util_domain.threading != FI_THREAD_DOMAIN) {
+		if (domain->util_domain.threading != FI_THREAD_DOMAIN) {
 			cntr_attr.wait_obj = FI_WAIT_FD;
 		} else {
 			/* We can wait on the progress allfds */
@@ -470,31 +322,12 @@ int xnet_cntr_open(struct fid_domain *fid_domain, struct fi_cntr_attr *attr,
 	}
 
 	ret = ofi_cntr_init(&xnet_prov, fid_domain, attr, cntr,
-			    &xnet_cntr_progress, context);
+			    &ofi_cntr_progress, context);
 	if (ret)
 		goto free;
 
-	if (attr->wait_obj == FI_WAIT_NONE) {
-		cntr->cntr_fid.ops = &xnet_cntr_ops;
-	} else {
-		progress = xnet_cntr2_progress(cntr);
-		if (attr->wait_obj == FI_WAIT_FD && ofi_have_epoll) {
-			ret = ofi_wait_add_fd(cntr->wait,
-					ofi_dynpoll_get_fd(&progress->epoll_fd),
-					POLLIN, xnet_cntr_wait_try_func, NULL,
-					&cntr->cntr_fid);
-		} else {
-			ret = xnet_start_progress(progress);
-		}
-		if (ret)
-			goto cleanup;
-	}
-
 	*cntr_fid = &cntr->cntr_fid;
 	return FI_SUCCESS;
-
-cleanup:
-	ofi_cntr_cleanup(cntr);
 free:
 	free(cntr);
 	return ret;

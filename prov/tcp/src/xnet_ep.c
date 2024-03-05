@@ -607,14 +607,44 @@ static int xnet_ep_close(struct fid *fid)
 	free(ep->cm_msg);
 	free(ep->addr);
 
+	if (!ep->srx) {
+		xnet_del_progress(ep->progress);
+		xnet_close_progress(ep->progress);
+		free(ep->progress);
+	}
+
 	ofi_endpoint_close(&ep->util_ep);
 	free(ep);
 	return 0;
 }
 
+static int xnet_ep_add_cq_fd(struct xnet_ep *ep, struct util_cq *cq)
+{
+	if (cq->wait && ofi_have_epoll)
+		return ofi_wait_add_fd(cq->wait,
+				       ofi_dynpoll_get_fd(&ep->progress->epoll_fd),
+				       POLLIN, xnet_cq_wait_try_func, cq,
+				       &cq->cq_fid);
+
+	return FI_SUCCESS;
+}
+
+static int xnet_ep_add_cntr_fd(struct xnet_ep *ep, struct util_cntr *cntr)
+{
+	if (cntr->wait && cntr->wait->wait_obj == FI_WAIT_FD && ofi_have_epoll)
+		return ofi_wait_add_fd(cntr->wait,
+				       ofi_dynpoll_get_fd(&ep->progress->epoll_fd),
+				       POLLIN, xnet_cntr_wait_try_func, NULL,
+				       &cntr->cntr_fid);
+
+	return xnet_start_progress(ep->progress);
+}
+
 static int xnet_ep_ctrl(struct fid *fid, int command, void *arg)
 {
 	struct xnet_ep *ep;
+	struct xnet_domain *domain;
+	size_t ret, i;
 
 	ep = container_of(fid, struct xnet_ep, util_ep.ep_fid.fid);
 	switch (command) {
@@ -625,19 +655,58 @@ static int xnet_ep_ctrl(struct fid *fid, int command, void *arg)
 				"missing needed CQ binding\n");
 			return -FI_ENOCQ;
 		}
+
+		if (!ep->srx) {
+			ep->progress = calloc(sizeof(*ep->progress), 1);
+			if (!ep->progress)
+				return -FI_ENOMEM;
+
+			domain = container_of(ep->util_ep.domain, struct xnet_domain,
+						util_domain);
+			ret = xnet_init_progress(ep->progress, domain);
+			if (ret) {
+				free(ep->progress);
+				return ret;
+			}
+		} else {
+			ep->progress = &ep->srx->progress;
+		}
+		ret = xnet_ep_add_cq_fd(ep, ep->util_ep.tx_cq);
+		if (ret)
+			goto free_progress;
+
+		if (ep->util_ep.tx_cq != ep->util_ep.rx_cq) {
+			ret = xnet_ep_add_cq_fd(ep, ep->util_ep.rx_cq);
+			if (ret)
+				goto free_progress;
+		}
+
+		for (i = 0; i < CNTR_CNT; i++) {
+			if (ep->util_ep.cntrs[i])
+				xnet_ep_add_cntr_fd(ep, ep->util_ep.cntrs[i]);
+		}
+
+		if (ep->eq) {
+			ret = xnet_eq_add_progress(ep->eq, ep->progress);
+			if (ret)
+				goto free_progress;
+		}
 		break;
 	default:
 		FI_WARN(&xnet_prov, FI_LOG_EP_CTRL, "unsupported command\n");
 		return -FI_ENOSYS;
 	}
 	return FI_SUCCESS;
+
+free_progress:
+	if (!ep->srx)
+		free(ep->progress);
+	return ret;
 }
 
 static int xnet_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 {
-	struct xnet_domain *domain;
 	struct xnet_ep *ep;
-	struct xnet_eq *eq;
 	struct xnet_srx *srx;
 	int ret;
 
@@ -651,18 +720,7 @@ static int xnet_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 			ep->profile = srx->profile;
 		return FI_SUCCESS;
 	case FI_CLASS_EQ:
-		/* msg endpoints created by an rdm endpoint will not/cannot
-		 * go through this path without creating a potential deadlock
-		 * as a result of nested locking.  This is because we would
-		 * be holding the progress lock when the rdm ep creates and
-		 * configures the msg ep.
-		 */
-		eq = container_of(bfid, struct xnet_eq, util_eq.eq_fid.fid);
-		domain = container_of(ep->util_ep.domain, struct xnet_domain,
-				      util_domain.domain_fid.fid);
-		ret = xnet_add_domain_progress(eq, domain);
-		if (ret)
-			break;
+		ep->eq = container_of(bfid, struct xnet_eq, util_eq.eq_fid.fid);
 		/* fall through */
 	default:
 		ret = ofi_ep_bind(&ep->util_ep, bfid, flags);
@@ -718,10 +776,18 @@ static struct fi_ops_ep xnet_ep_ops = {
 	.tx_size_left = fi_no_tx_size_left,
 };
 
+static void xnet_ep_progress(struct util_ep *util_ep)
+{
+	struct xnet_ep *ep;
+	ep = container_of(util_ep, struct xnet_ep, util_ep);
+	xnet_progress(ep->progress, false);
+}
+
 int xnet_endpoint(struct fid_domain *domain, struct fi_info *info,
 		  struct fid_ep **ep_fid, void *context)
 {
 	struct xnet_ep *ep;
+	struct xnet_domain *xnet_domain;
 	struct xnet_pep *pep;
 	struct xnet_conn_handle *conn;
 	int ret;
@@ -731,12 +797,13 @@ int xnet_endpoint(struct fid_domain *domain, struct fi_info *info,
 		return -FI_ENOMEM;
 
 	ret = ofi_endpoint_init(domain, &xnet_util_prov, info, &ep->util_ep,
-				context, NULL);
+				context, &xnet_ep_progress);
 	if (ret)
 		goto err1;
 
 	assert(info->ep_attr->type == FI_EP_MSG);
-	ofi_bsock_init(&ep->bsock, &xnet_ep2_progress(ep)->sockapi,
+	xnet_domain = container_of(domain, struct xnet_domain, util_domain);
+	ofi_bsock_init(&ep->bsock, &xnet_domain->sockapi,
 		       xnet_staging_sbuf_size, xnet_prefetch_rbuf_size,
 		       &ep->util_ep.ep_fid);
 	if (info->handle) {

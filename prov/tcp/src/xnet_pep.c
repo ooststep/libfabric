@@ -399,6 +399,11 @@ int xnet_passive_ep(struct fid_fabric *fabric, struct fi_info *info,
 			goto err3;
 	}
 
+	if (xnet_io_uring)
+		pep->sockapi = xnet_sockapi_uring;
+	else
+		pep->sockapi = xnet_sockapi_socket;
+
 	*pep_fid = &pep->util_pep.pep_fid;
 	return FI_SUCCESS;
 err3:

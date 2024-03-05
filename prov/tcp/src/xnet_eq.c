@@ -85,7 +85,6 @@ static int xnet_eq_close(struct fid *fid)
 {
 	struct xnet_eq *eq;
 	struct xnet_fabric *fabric;
-	struct dlist_entry *item, *tmp;
 	int ret;
 
 	eq = container_of(fid, struct xnet_eq, util_eq.eq_fid.fid);
@@ -97,16 +96,11 @@ static int xnet_eq_close(struct fid *fid)
 	dlist_remove(&eq->fabric_entry);
 	ofi_mutex_unlock(&fabric->util_fabric.lock);
 
-	ofi_mutex_lock(&eq->domain_lock);
-	dlist_foreach_safe(&eq->domain_list, item, tmp)
-		free(item);
-	ofi_mutex_unlock(&eq->domain_lock);
-
 	ret = ofi_eq_cleanup(fid);
 	if (ret)
 		return ret;
 
-	ofi_mutex_destroy(&eq->domain_lock);
+	ofi_mutex_destroy(&eq->prog_list_lock);
 	free(eq);
 	return 0;
 }
@@ -134,57 +128,55 @@ static int xnet_eq_wait_try_func(void *arg)
 	return FI_SUCCESS;
 }
 
-/* Safe to call even if domain was never added */
-static void xnet_eq_del_domain(struct xnet_eq *eq, struct xnet_domain *domain)
+static void xnet_eq_del_progress(struct xnet_eq *eq, struct xnet_progress *progress)
 {
-	ofi_mutex_lock(&eq->domain_lock);
-	fid_list_remove(&eq->domain_list, NULL,
-			&domain->util_domain.domain_fid.fid);
+	ofi_mutex_lock(&eq->prog_list_lock);
+	fid_list_remove(&eq->progress_list, NULL, &progress->fid);
 
 	if (eq->util_eq.wait && ofi_have_epoll) {
 		(void) ofi_wait_del_fd(eq->util_eq.wait,
-				ofi_dynpoll_get_fd(&domain->progress.epoll_fd));
+				ofi_dynpoll_get_fd(&progress->epoll_fd));
 	}
-	ofi_mutex_unlock(&eq->domain_lock);
+	ofi_mutex_unlock(&eq->prog_list_lock);
 }
 
-void xnet_del_domain_progress(struct xnet_domain *domain)
+void xnet_del_progress(struct xnet_progress *progress)
 {
 	struct xnet_fabric *fabric;
 	struct xnet_eq *eq;
 	struct dlist_entry *item;
 
-	fabric = container_of(domain->util_domain.fabric, struct xnet_fabric,
+	fabric = container_of(progress->domain->util_domain.fabric, struct xnet_fabric,
 			      util_fabric.fabric_fid);
 
 	ofi_mutex_lock(&fabric->util_fabric.lock);
 	dlist_foreach(&fabric->eq_list, item) {
 		eq = container_of(item, struct xnet_eq, fabric_entry);
-		xnet_eq_del_domain(eq, domain);
+		xnet_eq_del_progress(eq, progress);
 	}
 	ofi_mutex_unlock(&fabric->util_fabric.lock);
 }
 
-int xnet_add_domain_progress(struct xnet_eq *eq, struct xnet_domain *domain)
+int xnet_eq_add_progress(struct xnet_eq *eq, struct xnet_progress *progress)
 {
 	int ret;
 
-	ofi_mutex_lock(&eq->domain_lock);
-	ret = fid_list_search(&eq->domain_list,
-			      &domain->util_domain.domain_fid.fid);
+	ofi_mutex_lock(&eq->prog_list_lock);
+	ret = fid_list_search(&eq->progress_list,
+			      &progress->fid);
 	if (ret)
 		goto unlock;
 
 	if (eq->util_eq.wait && ofi_have_epoll) {
 		ret = ofi_wait_add_fd(eq->util_eq.wait,
-				ofi_dynpoll_get_fd(&domain->progress.epoll_fd),
-				POLLIN, xnet_eq_wait_try_func, NULL, domain);
+				ofi_dynpoll_get_fd(&progress->epoll_fd),
+				POLLIN, xnet_eq_wait_try_func, NULL, progress);
 	}
 unlock:
-	ofi_mutex_unlock(&eq->domain_lock);
+	ofi_mutex_unlock(&eq->prog_list_lock);
 
-	if (!ret && eq->progress.auto_progress)
-		ret = xnet_start_progress(&domain->progress);
+	if (!ret && progress->auto_progress)
+		ret = xnet_start_progress(progress);
 	else if (ret == -FI_EALREADY)
 		ret = 0;
 
@@ -211,8 +203,8 @@ int xnet_eq_create(struct fid_fabric *fabric_fid, struct fi_eq_attr *attr,
 		goto err1;
 	}
 
-	dlist_init(&eq->domain_list);
-	ret = ofi_mutex_init(&eq->domain_lock);
+	dlist_init(&eq->progress_list);
+	ret = ofi_mutex_init(&eq->prog_list_lock);
 	if (ret)
 		goto err2;
 
@@ -253,7 +245,7 @@ err5:
 err4:
 	xnet_close_progress(&eq->progress);
 err3:
-	ofi_mutex_destroy(&eq->domain_lock);
+	ofi_mutex_destroy(&eq->prog_list_lock);
 err2:
 	ofi_eq_cleanup(&eq->util_eq.eq_fid.fid);
 err1:

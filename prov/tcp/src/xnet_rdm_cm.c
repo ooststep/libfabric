@@ -68,7 +68,7 @@ static void xnet_close_conn(struct xnet_conn *conn)
 	struct slist_entry *item;
 
 	FI_DBG(&xnet_prov, FI_LOG_EP_CTRL, "closing conn %p\n", conn);
-	assert(xnet_progress_locked(xnet_rdm2_progress(conn->rdm)));
+	assert(xnet_progress_locked(conn->ep->progress));
 
 	if (conn->flags & XNET_CONN_RX_LOOPBACK) {
 		if (conn == conn->rdm->rx_loopback)
@@ -81,7 +81,7 @@ static void xnet_close_conn(struct xnet_conn *conn)
 
 	do {
 		item = slist_remove_first_match(
-			&xnet_rdm2_progress(conn->rdm)->event_list,
+			&conn->ep->progress->event_list,
 			xnet_match_event, conn->ep);
 		if (!item)
 			break;

@@ -870,11 +870,15 @@ static int xnet_srx_close(struct fid *fid)
 	ofi_array_destroy(&srx->src_tag_queues);
 	ofi_array_destroy(&srx->saved_msgs);
 
+	xnet_del_progress(&srx->progress);
+	xnet_close_progress(&srx->progress);
+
 	if (srx->cntr)
 		ofi_atomic_dec32(&srx->cntr->ref);
 	if (srx->cq)
 		ofi_atomic_dec32(&srx->cq->util_cq.ref);
 	ofi_atomic_dec32(&srx->domain->util_domain.ref);
+
 	free(srx);
 	return FI_SUCCESS;
 }
@@ -891,6 +895,7 @@ int xnet_srx_context(struct fid_domain *domain, struct fi_rx_attr *attr,
 		     struct fid_ep **rx_ep, void *context)
 {
 	struct xnet_srx *srx;
+	size_t ret;
 
 	srx = calloc(1, sizeof(*srx));
 	if (!srx)
@@ -911,6 +916,14 @@ int xnet_srx_context(struct fid_domain *domain, struct fi_rx_attr *attr,
 
 	srx->domain = container_of(domain, struct xnet_domain,
 				   util_domain.domain_fid);
+
+	ret = xnet_init_progress(&srx->progress, srx->domain);
+	if (ret) {
+		FI_WARN(&xnet_prov, FI_LOG_EP_CTRL,
+			"Unable to init progress\n");
+		free(srx);
+		return ret;
+	}
 	ofi_atomic_inc32(&srx->domain->util_domain.ref);
 	srx->match_tag_rx = (attr->caps & FI_DIRECTED_RECV) ?
 			    xnet_match_tag_addr : xnet_match_tag;

@@ -46,26 +46,6 @@
 
 static int (*xnet_start_op[xnet_op_max])(struct xnet_ep *ep);
 
-static struct ofi_sockapi xnet_sockapi_uring =
-{
-	.connect = ofi_sockapi_connect_uring,
-	.accept = ofi_sockapi_accept_uring,
-	.send = ofi_sockapi_send_uring,
-	.sendv = ofi_sockapi_sendv_uring,
-	.recv = ofi_sockapi_recv_uring,
-	.recvv = ofi_sockapi_recvv_uring,
-};
-
-static struct ofi_sockapi xnet_sockapi_socket =
-{
-	.connect = ofi_sockapi_connect_socket,
-	.accept = ofi_sockapi_accept_socket,
-	.send = ofi_sockapi_send_socket,
-	.sendv = ofi_sockapi_sendv_socket,
-	.recv = ofi_sockapi_recv_socket,
-	.recvv = ofi_sockapi_recvv_socket,
-};
-
 static void xnet_submit_uring(struct xnet_uring *uring)
 {
 	int submitted;
@@ -249,7 +229,7 @@ void xnet_complete_saved(struct xnet_xfer_entry *saved_entry, void *msg_data)
 	struct xnet_progress *progress;
 	size_t msg_len, copied;
 
-	progress = xnet_cq2_progress(saved_entry->cq);
+	progress = saved_entry->saving_ep->progress;
 	assert(xnet_progress_locked(progress));
 
 	msg_len = xnet_msg_len(&saved_entry->hdr);
@@ -1572,18 +1552,17 @@ void xnet_progress(struct xnet_progress *progress, bool clear_signal)
 
 void xnet_progress_all(struct xnet_eq *eq)
 {
-	struct xnet_domain *domain;
+	struct xnet_progress *progress;
 	struct dlist_entry *item;
 	struct fid_list_entry *entry;
 
-	ofi_mutex_lock(&eq->domain_lock);
-	dlist_foreach(&eq->domain_list, item) {
+	ofi_mutex_lock(&eq->prog_list_lock);
+	dlist_foreach(&eq->progress_list, item) {
 		entry = container_of(item, struct fid_list_entry, entry);
-		domain = container_of(entry->fid, struct xnet_domain,
-				      util_domain.domain_fid.fid);
-		xnet_progress(&domain->progress, false);
+		progress = container_of(entry->fid, struct xnet_progress, fid);
+		xnet_progress(progress, false);
 	}
-	ofi_mutex_unlock(&eq->domain_lock);
+	ofi_mutex_unlock(&eq->prog_list_lock);
 
 	xnet_progress(&eq->progress, false);
 }
@@ -1625,12 +1604,12 @@ int xnet_trywait(struct fid_fabric *fabric_fid, struct fid **fid, int count)
 		case FI_CLASS_CQ:
 			cq = container_of(fid[i], struct xnet_cq,
 					  util_cq.cq_fid.fid);
-			ofi_genlock_lock(xnet_cq2_progress(cq)->active_lock);
+			ofi_genlock_lock(&cq->util_cq.cq_lock);
 			if (ofi_cirque_isempty(cq->util_cq.cirq))
 				xnet_reset_wait(cq->util_cq.wait);
 			else
 				ret = -FI_EAGAIN;
-			ofi_genlock_unlock(xnet_cq2_progress(cq)->active_lock);
+			ofi_genlock_unlock(&cq->util_cq.cq_lock);
 			break;
 		case FI_CLASS_EQ:
 			eq = container_of(fid[i], struct xnet_eq,
@@ -1649,9 +1628,7 @@ int xnet_trywait(struct fid_fabric *fabric_fid, struct fid **fid, int count)
 			 */
 			cntr = container_of(fid[i], struct util_cntr,
 					    cntr_fid.fid);
-			ofi_genlock_lock(xnet_cntr2_progress(cntr)->active_lock);
 			xnet_reset_wait(cntr->wait);
-			ofi_genlock_unlock(xnet_cntr2_progress(cntr)->active_lock);
 			break;
 		case FI_CLASS_WAIT:
 			wait = container_of(fid[i], struct util_wait,
@@ -1745,10 +1722,9 @@ int xnet_start_progress(struct xnet_progress *progress)
 	if (xnet_disable_autoprog)
 		return 0;
 
-	ofi_genlock_lock(progress->active_lock);
+	assert(xnet_progress_locked(progress));
 	if (progress->auto_progress) {
-		ret = 0;
-		goto unlock;
+		return 0;
 	}
 
 	progress->auto_progress = true;
@@ -1761,8 +1737,6 @@ int xnet_start_progress(struct xnet_progress *progress)
 		ret = -ret;
 	}
 
-unlock:
-	ofi_genlock_unlock(progress->active_lock);
 	return ret;
 }
 
@@ -1784,12 +1758,12 @@ void xnet_stop_progress(struct xnet_progress *progress)
  * or EQ calls, we always need to enable an active lock, independent from
  * the threading model requested by the app.
  */
-static int xnet_init_locks(struct xnet_progress *progress, struct fi_info *info)
+static int xnet_init_locks(struct xnet_progress *progress, struct xnet_domain *domain)
 {
 	enum ofi_lock_type base_type, rdm_type;
 	int ret;
 
-	if (info && info->ep_attr && info->ep_attr->type == FI_EP_RDM) {
+	if (domain && domain->ep_type == FI_EP_RDM) {
 		base_type = OFI_LOCK_NONE;
 		rdm_type = OFI_LOCK_MUTEX;
 		progress->active_lock = &progress->rdm_lock;
@@ -1849,12 +1823,13 @@ static void xnet_destroy_uring(struct xnet_uring *uring,
 	}
 }
 
-int xnet_init_progress(struct xnet_progress *progress, struct fi_info *info)
+int xnet_init_progress(struct xnet_progress *progress, struct xnet_domain *domain)
 {
 	int ret;
 
 	progress->fid.fclass = XNET_CLASS_PROGRESS;
 	progress->auto_progress = false;
+	progress->domain = domain;
 	dlist_init(&progress->unexp_msg_list);
 	dlist_init(&progress->unexp_tag_list);
 	dlist_init(&progress->saved_tag_list);
@@ -1864,7 +1839,7 @@ int xnet_init_progress(struct xnet_progress *progress, struct fi_info *info)
 	if (ret)
 		return ret;
 
-	ret = xnet_init_locks(progress, info);
+	ret = xnet_init_locks(progress, domain);
 	if (ret)
 		goto err1;
 
@@ -1890,25 +1865,20 @@ int xnet_init_progress(struct xnet_progress *progress, struct fi_info *info)
 		if (!progress->cqes)
 			goto err5;
 
-		progress->sockapi = xnet_sockapi_uring;
 
 		ret = xnet_init_uring(&progress->tx_uring,
-				      info ? info->tx_attr->size :
-					     xnet_default_tx_size,
-				      &progress->sockapi.tx_uring,
+				      domain->tx_size,
+				      &progress->domain->sockapi.tx_uring,
 				      &progress->epoll_fd);
 		if (ret)
 			goto err6;
 
 		ret = xnet_init_uring(&progress->rx_uring,
-				      info ? info->rx_attr->size :
-					     xnet_default_rx_size,
-				      &progress->sockapi.rx_uring,
+				      domain->rx_size,
+				      &progress->domain->sockapi.rx_uring,
 				      &progress->epoll_fd);
 		if (ret)
 			goto err7;
-	} else {
-		progress->sockapi = xnet_sockapi_socket;
 	}
 
 	return 0;
