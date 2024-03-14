@@ -233,6 +233,23 @@ int xnet_cq_wait_try_func(void *arg)
 	return FI_SUCCESS;
 }
 
+void xnet_cq_progress(struct util_cq *util_cq)
+{
+	struct xnet_cq *cq;
+	struct xnet_progress *progress;
+	struct fid_list_entry *fid_entry;
+	struct dlist_entry *item, *tmp;
+
+	cq = container_of(util_cq, struct xnet_cq, util_cq);
+	ofi_genlock_lock(&cq->prog_list_lock);
+	dlist_foreach_safe(&cq->progress_list, item, tmp) {
+		fid_entry = container_of(item, struct fid_list_entry, entry);
+		progress = container_of(fid_entry->fid, struct xnet_progress, fid);
+		xnet_progress(progress, false);
+	}
+	ofi_genlock_unlock(&cq->prog_list_lock);
+}
+
 int xnet_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		 struct fid_cq **cq_fid, void *context)
 {
@@ -254,15 +271,21 @@ int xnet_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 	}
 
 	ret = ofi_cq_init(&xnet_prov, domain, attr, &cq->util_cq,
-			  &ofi_cq_progress, context);
+			  &xnet_cq_progress, context);
 	if (ret)
 		goto free_cq;
+
+	dlist_init(&cq->progress_list);
+	ret = ofi_genlock_init(&cq->prog_list_lock, OFI_LOCK_MUTEX);
+	if (ret)
+		goto cleanup_cq;
 
 	*cq_fid = &cq->util_cq.cq_fid;
 	(*cq_fid)->fid.ops = &xnet_cq_fi_ops;
 	(*cq_fid)->ops = &xnet_cq_ops;
 	return 0;
-
+cleanup_cq:
+	ofi_cq_cleanup(&cq->util_cq);
 free_cq:
 	free(cq);
 	return ret;

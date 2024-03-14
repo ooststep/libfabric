@@ -701,6 +701,20 @@ static int xnet_enable_rdm(struct xnet_rdm *rdm)
 	size_t len;
 	int ret;
 
+	// insert rdm progress to the cq progress list
+	ret = xnet_progress_add_cq_fd(&rdm->srx->progress, rdm->util_ep.tx_cq);
+	if (ret)
+		return ret;
+	rdm->srx->progress.tx_cq = rdm->util_ep.tx_cq;
+
+	if (rdm->util_ep.tx_cq != rdm->util_ep.rx_cq) {
+		ret = xnet_progress_add_cq_fd(&rdm->srx->progress,
+					      rdm->util_ep.rx_cq);
+		if (ret)
+			return ret;
+		rdm->srx->progress.rx_cq = rdm->util_ep.rx_cq;
+	}
+
 	(void) fi_ep_bind(&rdm->srx->rx_fid, &rdm->util_ep.rx_cq->cq_fid.fid,
 			  FI_RECV);
 	if (rdm->util_ep.cntrs[CNTR_RX]) {

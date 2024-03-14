@@ -524,7 +524,6 @@ void ofi_cq_progress(struct util_cq *cq)
 		fid_entry = container_of(item, struct fid_list_entry, entry);
 		ep = container_of(fid_entry->fid, struct util_ep, ep_fid.fid);
 		ep->progress(ep);
-
 	}
 	ofi_genlock_unlock(&cq->ep_list_lock);
 }

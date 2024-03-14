@@ -1824,6 +1824,35 @@ static void xnet_destroy_uring(struct xnet_uring *uring,
 	}
 }
 
+int xnet_progress_del_cq_fd(struct xnet_progress *progress, struct util_cq *cq)
+{
+	struct xnet_cq *xnet_cq = container_of(cq, struct xnet_cq, util_cq.cq_fid);
+
+	fid_list_remove2(&xnet_cq->progress_list, &xnet_cq->prog_list_lock,
+			       &progress->fid);
+
+	if (cq->wait && ofi_have_epoll)
+		return ofi_wait_del_fd(cq->wait,
+				       ofi_dynpoll_get_fd(&progress->epoll_fd));
+
+	return FI_SUCCESS;
+}
+
+int xnet_progress_add_cq_fd(struct xnet_progress *progress, struct util_cq *cq)
+{
+	struct xnet_cq *xnet_cq = container_of(cq, struct xnet_cq, util_cq.cq_fid);
+	fid_list_insert2(&xnet_cq->progress_list, &xnet_cq->prog_list_lock,
+			&progress->fid);
+
+	if (cq->wait && ofi_have_epoll)
+		return ofi_wait_add_fd(cq->wait,
+				       ofi_dynpoll_get_fd(&progress->epoll_fd),
+				       POLLIN, xnet_cq_wait_try_func, cq,
+				       &cq->cq_fid);
+
+	return FI_SUCCESS;
+}
+
 int xnet_init_progress(struct xnet_progress *progress, struct xnet_domain *domain)
 {
 	int ret;
@@ -1907,12 +1936,20 @@ void xnet_close_progress(struct xnet_progress *progress)
 	assert(dlist_empty(&progress->unexp_tag_list));
 	assert(dlist_empty(&progress->saved_tag_list));
 	assert(slist_empty(&progress->event_list));
+
 	xnet_stop_progress(progress);
 	if (xnet_io_uring) {
 		free(progress->cqes);
 		xnet_destroy_uring(&progress->rx_uring, &progress->epoll_fd);
 		xnet_destroy_uring(&progress->tx_uring, &progress->epoll_fd);
 	}
+
+	if (progress->tx_cq)
+		xnet_progress_del_cq_fd(progress, progress->tx_cq);
+
+	if (progress->rx_cq)
+		xnet_progress_del_cq_fd(progress, progress->rx_cq);
+
 	ofi_dynpoll_close(&progress->epoll_fd);
 	ofi_bufpool_destroy(progress->xfer_pool);
 	ofi_genlock_destroy(&progress->ep_lock);

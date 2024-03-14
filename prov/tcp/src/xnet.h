@@ -317,6 +317,10 @@ struct xnet_progress {
 	struct dlist_entry	unexp_msg_list;
 	struct dlist_entry	unexp_tag_list;
 	struct dlist_entry	saved_tag_list;
+
+	struct util_cq		*tx_cq;
+	struct util_cq		*rx_cq;
+
 	struct fd_signal	signal;
 
 	struct slist		event_list;
@@ -383,6 +387,7 @@ void xnet_close_progress(struct xnet_progress *progress);
 int xnet_start_progress(struct xnet_progress *progress);
 void xnet_stop_progress(struct xnet_progress *progress);
 int xnet_start_recv(struct xnet_ep *ep, struct xnet_xfer_entry *rx_entry);
+int xnet_progress_add_cq_fd(struct xnet_progress *progress, struct util_cq *cq);
 
 void xnet_progress(struct xnet_progress *progress, bool clear_signal);
 void xnet_run_progress(struct xnet_progress *progress, bool clear_signal);
@@ -484,6 +489,8 @@ struct xnet_domain {
 
 struct xnet_cq {
 	struct util_cq		util_cq;
+	struct dlist_entry	progress_list;
+	struct ofi_genlock	prog_list_lock;
 };
 
 int xnet_cq_wait_try_func(void *arg);

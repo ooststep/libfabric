@@ -621,17 +621,6 @@ static int xnet_ep_close(struct fid *fid)
 	return 0;
 }
 
-static int xnet_ep_add_cq_fd(struct xnet_ep *ep, struct util_cq *cq)
-{
-	if (cq->wait && ofi_have_epoll)
-		return ofi_wait_add_fd(cq->wait,
-				       ofi_dynpoll_get_fd(&ep->progress->epoll_fd),
-				       POLLIN, xnet_cq_wait_try_func, cq,
-				       &cq->cq_fid);
-
-	return FI_SUCCESS;
-}
-
 static int xnet_ep_add_cntr_fd(struct xnet_ep *ep, struct util_cntr *cntr)
 {
 	if (cntr->wait && cntr->wait->wait_obj == FI_WAIT_FD && ofi_have_epoll)
@@ -659,13 +648,13 @@ static int xnet_ep_ctrl(struct fid *fid, int command, void *arg)
 			return -FI_ENOCQ;
 		}
 
+		domain = container_of(ep->util_ep.domain, struct xnet_domain,
+						util_domain);
 		if (!ep->srx) {
 			ep->progress = calloc(sizeof(*ep->progress), 1);
 			if (!ep->progress)
 				return -FI_ENOMEM;
 
-			domain = container_of(ep->util_ep.domain, struct xnet_domain,
-						util_domain);
 			ret = xnet_init_progress(ep->progress, domain);
 			if (ret) {
 				free(ep->progress);
@@ -674,14 +663,21 @@ static int xnet_ep_ctrl(struct fid *fid, int command, void *arg)
 		} else {
 			ep->progress = &ep->srx->progress;
 		}
-		ret = xnet_ep_add_cq_fd(ep, ep->util_ep.tx_cq);
-		if (ret)
-			goto free_progress;
 
-		if (ep->util_ep.tx_cq != ep->util_ep.rx_cq) {
-			ret = xnet_ep_add_cq_fd(ep, ep->util_ep.rx_cq);
+		if (domain->ep_type == FI_EP_MSG) {
+			ret = xnet_progress_add_cq_fd(ep->progress,
+						      ep->util_ep.tx_cq);
 			if (ret)
 				goto free_progress;
+			ep->progress->tx_cq = ep->util_ep.tx_cq;
+
+			if (ep->util_ep.tx_cq != ep->util_ep.rx_cq) {
+				ret = xnet_progress_add_cq_fd(ep->progress,
+							      ep->util_ep.rx_cq);
+				if (ret)
+					goto free_progress;
+				ep->progress->rx_cq = ep->util_ep.rx_cq;
+			}
 		}
 
 		for (i = 0; i < CNTR_CNT; i++) {
