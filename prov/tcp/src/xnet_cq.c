@@ -286,7 +286,6 @@ int xnet_cntr_wait_try_func(void *arg)
 int xnet_cntr_open(struct fid_domain *fid_domain, struct fi_cntr_attr *attr,
 		   struct fid_cntr **cntr_fid, void *context)
 {
-	struct xnet_domain *domain;
 	struct util_cntr *cntr;
 	struct fi_cntr_attr cntr_attr;
 	int ret;
@@ -295,16 +294,9 @@ int xnet_cntr_open(struct fid_domain *fid_domain, struct fi_cntr_attr *attr,
 	if (!cntr)
 		return -FI_ENOMEM;
 
-	domain = container_of(fid_domain, struct xnet_domain,
-			      util_domain.domain_fid);
 	if (attr->wait_obj == FI_WAIT_UNSPEC) {
 		cntr_attr = *attr;
-		if (domain->util_domain.threading != FI_THREAD_DOMAIN) {
-			cntr_attr.wait_obj = FI_WAIT_FD;
-		} else {
-			/* We can wait on the progress allfds */
-			cntr_attr.wait_obj = FI_WAIT_NONE;
-		}
+		cntr_attr.wait_obj = FI_WAIT_FD;
 		attr = &cntr_attr;
 	}
 

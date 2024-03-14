@@ -734,12 +734,71 @@ int xnet_ep_bind_cq(struct util_ep *ep, struct util_cq *cq, uint64_t flags)
 	}
 
 	if (flags & (FI_TRANSMIT | FI_RECV)) {
-		return fid_list_insert(&cq->ep_list,
-				       NULL,
-				       &ep->ep_fid.fid);
+		return fid_list_insert(&cq->ep_list, NULL, &ep->ep_fid.fid);
 	}
 
 	return FI_SUCCESS;
+}
+
+int xnet_ep_bind_cntr(struct util_ep *ep, struct util_cntr *cntr, uint64_t flags)
+{
+	if (flags & ~(FI_TRANSMIT | FI_RECV | FI_READ  | FI_WRITE |
+		      FI_REMOTE_READ | FI_REMOTE_WRITE)) {
+		FI_WARN(ep->domain->fabric->prov, FI_LOG_EP_CTRL,
+			"Unsupported bind flags\n");
+		return -FI_EBADFLAGS;
+	}
+
+	if (((flags & FI_TRANSMIT) && ep->cntrs[CNTR_TX]) ||
+	    ((flags & FI_RECV) && ep->cntrs[CNTR_RX]) ||
+	    ((flags & FI_READ) && ep->cntrs[CNTR_RD]) ||
+	    ((flags & FI_WRITE) && ep->cntrs[CNTR_WR]) ||
+	    ((flags & FI_REMOTE_READ) && ep->cntrs[CNTR_REM_RD]) ||
+	    ((flags & FI_REMOTE_WRITE) && ep->cntrs[CNTR_REM_WR])) {
+		FI_WARN(ep->domain->fabric->prov, FI_LOG_EP_CTRL,
+			"Duplicate counter binding\n");
+		return -FI_EINVAL;
+	}
+
+	if (flags & FI_TRANSMIT) {
+		ep->cntrs[CNTR_TX] = cntr;
+		ep->cntr_inc_funcs[CNTR_TX] = ofi_cntr_inc;
+		ofi_atomic_inc32(&cntr->ref);
+	}
+
+	if (flags & FI_RECV) {
+		ep->cntrs[CNTR_RX]= cntr;
+		ep->cntr_inc_funcs[CNTR_RX] = ofi_cntr_inc;
+		ofi_atomic_inc32(&cntr->ref);
+	}
+
+	if (flags & FI_READ) {
+		ep->cntrs[CNTR_RD] = cntr;
+		ep->cntr_inc_funcs[CNTR_RD] = ofi_cntr_inc;
+		ofi_atomic_inc32(&cntr->ref);
+	}
+
+	if (flags & FI_WRITE) {
+		ep->cntrs[CNTR_WR] = cntr;
+		ep->cntr_inc_funcs[CNTR_WR] = ofi_cntr_inc;
+		ofi_atomic_inc32(&cntr->ref);
+	}
+
+	if (flags & FI_REMOTE_READ) {
+		ep->cntrs[CNTR_REM_RD] = cntr;
+		ep->cntr_inc_funcs[CNTR_REM_RD] = ofi_cntr_inc;
+		ofi_atomic_inc32(&cntr->ref);
+	}
+
+	if (flags & FI_REMOTE_WRITE) {
+		ep->cntrs[CNTR_REM_WR] = cntr;
+		ep->cntr_inc_funcs[CNTR_REM_WR] = ofi_cntr_inc;
+		ofi_atomic_inc32(&cntr->ref);
+	}
+
+	ep->flags |= OFI_CNTR_ENABLED;
+
+	return fid_list_insert(&cntr->ep_list, NULL, &ep->ep_fid.fid);
 }
 
 static int xnet_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
@@ -747,6 +806,7 @@ static int xnet_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 	struct xnet_ep *ep;
 	struct xnet_srx *srx;
 	struct util_cq *cq;
+	struct util_cntr *cntr;
 	int ret;
 
 	ep = container_of(fid, struct xnet_ep, util_ep.ep_fid.fid);
@@ -755,6 +815,10 @@ static int xnet_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 	case FI_CLASS_CQ:
 		cq = container_of(bfid, struct util_cq, cq_fid.fid);
 		ret = xnet_ep_bind_cq(&ep->util_ep, cq, flags);
+		break;
+	case FI_CLASS_CNTR:
+		cntr = container_of(bfid, struct util_cntr, cntr_fid.fid);
+		ret = xnet_ep_bind_cntr(&ep->util_ep, cntr, flags);
 		break;
 	case FI_CLASS_SRX_CTX:
 		srx = container_of(bfid, struct xnet_srx, rx_fid.fid);
