@@ -147,13 +147,6 @@ static int xnet_open_ep(struct fid_domain *domain_fid, struct fi_info *info,
 	return -FI_EINVAL;
 }
 
-static int xnet_av_open(struct fid_domain *domain_fid, struct fi_av_attr *attr,
-			struct fid_av **fid_av, void *context)
-{
-	return rxm_util_av_open(domain_fid, attr, fid_av, context,
-				sizeof(struct xnet_conn), NULL);
-}
-
 static int
 xnet_query_atomic(struct fid_domain *domain, enum fi_datatype datatype,
 		  enum fi_op op, struct fi_atomic_attr *attr, uint64_t flags)
