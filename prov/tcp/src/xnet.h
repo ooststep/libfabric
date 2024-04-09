@@ -467,6 +467,11 @@ struct xnet_xfer_entry {
 	char			msg_data[];
 };
 
+struct xnet_av {
+	struct fid_av av_fid;
+	struct fid_av *rxm_av;
+};
+
 struct xnet_domain {
 	struct util_domain		util_domain;
 	struct xnet_progress		progress;
@@ -612,7 +617,8 @@ static inline struct xnet_cq *xnet_ep_tx_cq(struct xnet_ep *ep)
 	return container_of(ep->util_ep.tx_cq, struct xnet_cq, util_cq);
 }
 
-
+int xnet_av_open(struct fid_domain *domain_fid, struct fi_av_attr *attr,
+		 struct fid_av **fid_av, void *context);
 int xnet_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		 struct fid_cq **cq_fid, void *context);
 void xnet_report_success(struct xnet_xfer_entry *xfer_entry);
