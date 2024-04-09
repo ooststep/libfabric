@@ -467,9 +467,10 @@ struct xnet_xfer_entry {
 	char			msg_data[];
 };
 
-struct xnet_av {
-	struct fid_av av_fid;
-	struct fid_av *rxm_av;
+struct xnet_mplex_av {
+	struct util_av		util_av;
+	struct dlist_entry	subav_list;
+	struct ofi_genlock	lock;
 };
 
 struct xnet_domain {
@@ -493,7 +494,6 @@ struct xnet_domain {
 	struct fi_info		*subdomain_info;
 	struct ofi_genlock	subdomain_list_lock;
 	struct dlist_entry	subdomain_list;
-	struct dlist_entry	av_list;
 };
 
 int xnet_multiplex_av_open(struct fid_domain *domain_fid, struct fi_av_attr *attr,

@@ -199,7 +199,7 @@ static int xnet_mplex_domain_close(fid_t fid)
 // TODO: implement av/cq/cntr/srx open funcs
 static struct fi_ops_domain xnet_mplex_domain_ops = {
 	.size = sizeof(struct fi_ops_domain),
-	.av_open = fi_no_av_open,
+	.av_open = xnet_multiplex_av_open,
 	.cq_open = xnet_cq_open,
 	.endpoint = xnet_open_ep,
 	.scalable_ep = fi_no_scalable_ep,
