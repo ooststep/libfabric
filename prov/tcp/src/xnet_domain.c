@@ -167,20 +167,6 @@ xnet_query_atomic(struct fid_domain *domain, enum fi_datatype datatype,
 	return -FI_EOPNOTSUPP;
 }
 
-static struct fi_ops_domain xnet_domain_ops = {
-	.size = sizeof(struct fi_ops_domain),
-	.av_open = xnet_av_open,
-	.cq_open = xnet_cq_open,
-	.endpoint = xnet_open_ep,
-	.scalable_ep = fi_no_scalable_ep,
-	.cntr_open = xnet_cntr_open,
-	.poll_open = fi_poll_create,
-	.stx_ctx = fi_no_stx_context,
-	.srx_ctx = xnet_srx_context,
-	.query_atomic = xnet_query_atomic,
-	.query_collective = fi_no_query_collective,
-};
-
 static int xnet_domain_close(fid_t fid)
 {
 	struct xnet_domain *domain;
@@ -198,6 +184,119 @@ static int xnet_domain_close(fid_t fid)
 	free(domain);
 	return FI_SUCCESS;
 }
+
+static int xnet_mplex_domain_close(fid_t fid)
+{
+	struct xnet_domain *domain;
+	struct fid_list_entry *item;
+
+	domain = container_of(fid, struct xnet_domain, util_domain.domain_fid.fid);
+	while(!dlist_empty(&domain->subdomain_list)) {
+		dlist_pop_front(&domain->subdomain_list, struct fid_list_entry,	item, entry);
+		(void)fi_close(item->fid);
+		free(item);
+	}
+
+	ofi_genlock_destroy(&domain->subdomain_list_lock);
+	ofi_domain_close(&domain->util_domain);
+	free(domain);
+	return FI_SUCCESS;
+}
+
+// TODO: implement av/cq/cntr/srx open funcs
+static struct fi_ops_domain xnet_mplex_domain_ops = {
+	.size = sizeof(struct fi_ops_domain),
+	.av_open = fi_no_av_open,
+	.cq_open = xnet_cq_open,
+	.endpoint = xnet_open_ep,
+	.scalable_ep = fi_no_scalable_ep,
+	.cntr_open = fi_no_cntr_open,
+	.poll_open = fi_poll_create,
+	.stx_ctx = fi_no_stx_context,
+	.srx_ctx = xnet_srx_context,
+	.query_atomic = xnet_query_atomic,
+	.query_collective = fi_no_query_collective,
+};
+
+static struct fi_ops xnet_mplex_domain_fi_ops = {
+	.size = sizeof(struct fi_ops),
+	.close = xnet_mplex_domain_close,
+	.bind = fi_no_bind,
+	.control = fi_no_control,
+	.ops_open = fi_no_ops_open,
+	.tostr = fi_no_tostr,
+	.ops_set = fi_no_ops_set,
+};
+
+static struct fi_ops_mr xnet_mplex_domain_fi_ops_mr = {
+	.size = sizeof(struct fi_ops_mr),
+	.reg = xnet_mr_reg,
+	.regv = xnet_mr_regv,
+	.regattr = xnet_mr_regattr,
+};
+
+int xnet_domain_multiplexed(struct fid_domain *domain_fid)
+{
+	return domain_fid->ops == &xnet_mplex_domain_ops;
+}
+
+int xnet_domain_multiplex_open(struct fid_fabric *fabric_fid, struct fi_info *info,
+			       struct fid_domain **domain_fid, void *context)
+{
+	struct xnet_domain *domain;
+	int ret;
+
+	domain = calloc(1, sizeof(*domain));
+	if (!domain)
+		return -FI_ENOMEM;
+
+	ret = ofi_domain_init(fabric_fid, info, &domain->util_domain, context,
+			      OFI_LOCK_NONE);
+	if (ret)
+		goto free;
+
+	ret = ofi_genlock_init(&domain->subdomain_list_lock, OFI_LOCK_MUTEX);
+	if (ret)
+		goto close;
+
+	domain->subdomain_info = fi_dupinfo(info);
+	if (!domain->subdomain_info) {
+		ret = -FI_ENOMEM;
+		goto free_lock;
+	}
+
+	domain->subdomain_info->domain_attr->threading = FI_THREAD_DOMAIN;
+
+	dlist_init(&domain->subdomain_list);
+	domain->ep_type = info->ep_attr->type;
+	domain->util_domain.domain_fid.ops = &xnet_mplex_domain_ops;
+	domain->util_domain.domain_fid.fid.ops = &xnet_mplex_domain_fi_ops;
+	domain->util_domain.domain_fid.mr = &xnet_mplex_domain_fi_ops_mr;
+	*domain_fid = &domain->util_domain.domain_fid;
+	return FI_SUCCESS;
+
+free_lock:
+	ofi_genlock_destroy(&domain->subdomain_list_lock);
+close:
+	ofi_domain_close(&domain->util_domain);
+free:
+	free(domain);
+	return ret;
+}
+
+static struct fi_ops_domain xnet_domain_ops = {
+	.size = sizeof(struct fi_ops_domain),
+	.av_open = xnet_av_open,
+	.cq_open = xnet_cq_open,
+	.endpoint = xnet_open_ep,
+	.scalable_ep = fi_no_scalable_ep,
+	.cntr_open = xnet_cntr_open,
+	.poll_open = fi_poll_create,
+	.stx_ctx = fi_no_stx_context,
+	.srx_ctx = xnet_srx_context,
+	.query_atomic = xnet_query_atomic,
+	.query_collective = fi_no_query_collective,
+};
 
 static struct fi_ops xnet_domain_fi_ops = {
 	.size = sizeof(struct fi_ops),
@@ -225,6 +324,11 @@ int xnet_domain_open(struct fid_fabric *fabric_fid, struct fi_info *info,
 	ret = ofi_prov_check_info(&xnet_util_prov, fabric_fid->api_version, info);
 	if (ret)
 		return ret;
+
+	if (info->ep_attr->type == FI_EP_RDM &&
+	    info->domain_attr->threading == FI_THREAD_COMPLETION)
+		return xnet_domain_multiplex_open(fabric_fid, info, domain_fid,
+						  context);
 
 	domain = calloc(1, sizeof(*domain));
 	if (!domain)
