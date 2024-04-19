@@ -695,12 +695,115 @@ static struct fi_ops_ep xnet_rdm_ep_ops = {
 	.tx_size_left = fi_no_tx_size_left,
 };
 
+static int xnet_mplex_av_dup(struct util_ep *ep, struct xnet_domain *domain,
+			     struct xnet_domain *subdomain)
+{
+	int ret, i;
+	struct xnet_mplex_av *xnet_av;
+	struct util_av *util_av;
+	struct fid_av *av_fid;
+	struct fi_av_attr av_attr = {
+		.type = ep->domain->av_type,
+		.count = ep->av->av_entry_pool->entry_cnt,
+		.flags = 0,
+	};
+	size_t addr_size;
+	char addr[sizeof(struct sockaddr_in6)];
+	xnet_av = container_of(&ep->av->av_fid, struct xnet_mplex_av, util_av.av_fid);
+	ofi_genlock_lock(&xnet_av->lock);
+	ret = fi_av_open(&subdomain->util_domain.domain_fid, &av_attr, &av_fid, NULL);
+	if (ret)
+		goto out;
+	util_av = container_of(av_fid, struct util_av, av_fid);
+	for (i = 0; i < ep->av->av_entry_pool->entry_cnt; i++) {
+		ret = fi_av_lookup(&ep->av->av_fid, i, addr, &addr_size);
+		if (ret)
+			continue;
+		ret = ofi_av_insert_addr_at(util_av, addr, i);
+		if (ret)
+			goto out;
+	}
+	fid_list_insert(&xnet_av->subav_list, NULL, &av_fid->fid);
+
+	ofi_genlock_lock(&ep->av->ep_list_lock);
+	dlist_remove(&ep->av_entry);
+	ofi_genlock_unlock(&ep->av->ep_list_lock);
+	ofi_atomic_dec32(&ep->av->ref);
+
+	ep->av = NULL;
+	ofi_ep_bind_av(ep, util_av);
+	ret = FI_SUCCESS;
+out:
+	ofi_genlock_unlock(&xnet_av->lock);
+	return ret;
+};
+
+int xnet_rdm_resolve_domains(struct xnet_rdm *rdm)
+{
+	int ret;
+	struct fid_domain *subdomain_fid;
+	struct xnet_domain *subdomain;
+	struct xnet_domain *domain = container_of(rdm->util_ep.domain,
+							struct xnet_domain,
+							util_domain);
+
+	assert(rdm->util_ep.tx_cq->domain == rdm->util_ep.rx_cq->domain);
+	if (!xnet_domain_multiplexed(&rdm->util_ep.rx_cq->domain->domain_fid)) {
+		subdomain = container_of(&rdm->util_ep.rx_cq->domain->domain_fid,
+					 struct xnet_domain, util_domain.domain_fid);
+	} else {
+		ret = fi_domain(&domain->util_domain.fabric->fabric_fid,
+				domain->subdomain_info,
+				&subdomain_fid, NULL);
+		if (ret)
+			return ret;
+
+		subdomain = container_of(subdomain_fid, struct xnet_domain,
+					 util_domain.domain_fid);
+		ret = fid_list_insert2(&domain->subdomain_list,
+				       &domain->subdomain_list_lock,
+				       &subdomain_fid->fid);
+		if (ret)
+			fi_close(&subdomain_fid->fid);
+
+		ofi_atomic_dec32(&domain->util_domain.ref);
+		ofi_atomic_inc32(&subdomain->util_domain.ref);
+
+		if (rdm->util_ep.tx_cq != rdm->util_ep.rx_cq) {
+			ofi_atomic_dec32(&domain->util_domain.ref);
+			ofi_atomic_inc32(&subdomain->util_domain.ref);
+		}
+
+		rdm->util_ep.tx_cq->domain = &subdomain->util_domain;
+		rdm->util_ep.rx_cq->domain = &subdomain->util_domain;
+	}
+	ret = xnet_mplex_av_dup(&rdm->util_ep, domain, subdomain);
+	if (ret)
+		return ret;
+
+	//once for rdm ep, once for srx
+	ofi_atomic_dec32(&rdm->util_ep.domain->ref);
+	ofi_atomic_inc32(&subdomain->util_domain.ref);
+	ofi_atomic_dec32(&rdm->util_ep.domain->ref);
+	ofi_atomic_inc32(&subdomain->util_domain.ref);
+
+	rdm->util_ep.domain = &subdomain->util_domain;
+	rdm->srx->domain = subdomain;
+	return ret;
+}
+
 static int xnet_enable_rdm(struct xnet_rdm *rdm)
 {
 	struct xnet_progress *progress;
 	struct fi_info *info;
 	size_t len;
 	int ret;
+
+	if (xnet_domain_multiplexed(&rdm->util_ep.domain->domain_fid)) {
+		ret = xnet_rdm_resolve_domains(rdm);
+		if (ret)
+			return ret;
+	}
 
 	(void) fi_ep_bind(&rdm->srx->rx_fid, &rdm->util_ep.rx_cq->cq_fid.fid,
 			  FI_RECV);
