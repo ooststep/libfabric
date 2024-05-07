@@ -488,7 +488,8 @@ static inline void *ofi_bufpool_get_ibuf(struct ofi_bufpool *pool, size_t index)
 	buf = pool->region_table[region_index]->mem_region +
 		(index % pool->attr.chunk_cnt) * pool->entry_size;
 
-	assert(ofi_buf_hdr(buf)->allocated);
+	if (!ofi_buf_hdr(buf)->allocated)
+		return NULL;
 
 	return buf;
 }
@@ -558,7 +559,34 @@ static inline void *ofi_ibuf_alloc(struct ofi_bufpool *pool)
 
 	if (dlist_empty(&buf_region->free_list))
 		dlist_remove_init(&buf_region->entry);
+
 	return ofi_buf_data(buf_hdr);
+}
+
+static inline void *ofi_ibuf_alloc_at(struct ofi_bufpool *pool, size_t index)
+{
+	void *buf;
+	struct ofi_bufpool_hdr *buf_hdr;
+
+	struct ofi_bufpool_region *buf_region;
+
+	size_t region_index = index / pool->attr.chunk_cnt;
+
+	while (region_index < pool->region_cnt) {
+		if (ofi_bufpool_grow(pool))
+			return NULL;
+	}
+	buf_region = pool->region_table[region_index];
+	buf = buf_region->mem_region +
+		(index % pool->attr.chunk_cnt) * pool->entry_size;
+	buf_hdr = ofi_buf_hdr(buf);
+	assert(buf_hdr->allocated == false);
+	OFI_DBG_SET(buf_hdr->allocated, true);
+	dlist_remove(&buf_hdr->entry.dlist);
+	if (dlist_empty(&buf_region->free_list))
+		dlist_remove_init(&buf_region->entry);
+
+	return buf;
 }
 
 
