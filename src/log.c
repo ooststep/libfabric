@@ -57,6 +57,7 @@ static const char * const log_subsys[] = {
 	[FI_LOG_EQ] = "eq",
 	[FI_LOG_MR] = "mr",
 	[FI_LOG_CNTR] = "cntr",
+	[FI_LOG_TEST] = "test",
 	[FI_LOG_SUBSYS_MAX] = NULL
 };
 
