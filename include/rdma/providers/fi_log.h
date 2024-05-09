@@ -53,6 +53,7 @@ enum fi_log_subsys {
 	FI_LOG_EQ,
 	FI_LOG_MR,
 	FI_LOG_CNTR,
+	FI_LOG_TEST,
 	FI_LOG_SUBSYS_MAX
 };
 
