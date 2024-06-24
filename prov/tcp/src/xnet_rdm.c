@@ -738,6 +738,19 @@ out:
 	return ret;
 };
 
+static void xnet_reg_subdomain_mr(struct ofi_rbmap *map, struct ofi_rbnode *node, void *context)
+{
+	int ret;
+	struct fi_mr_attr *attr = (struct fi_mr_attr *)node->data;
+	struct xnet_domain *subdomain = context;
+
+	ret = ofi_mr_map_insert(&subdomain->util_domain.mr_map, attr,
+				&attr->requested_key, attr->context,
+				((struct ofi_mr*)attr->context)->flags);
+	if (ret)
+		XNET_WARN_ERR(FI_LOG_MR, "ofi_mr_map_insert", ret);
+}
+
 int xnet_rdm_resolve_domains(struct xnet_rdm *rdm)
 {
 	int ret;
@@ -776,6 +789,10 @@ int xnet_rdm_resolve_domains(struct xnet_rdm *rdm)
 
 		rdm->util_ep.tx_cq->domain = &subdomain->util_domain;
 		rdm->util_ep.rx_cq->domain = &subdomain->util_domain;
+
+		ofi_rbmap_foreach(domain->util_domain.mr_map.rbtree,
+				  domain->util_domain.mr_map.rbtree->root,
+				  xnet_reg_subdomain_mr, subdomain);
 	}
 	ret = xnet_mplex_av_dup(&rdm->util_ep, domain, subdomain);
 	if (ret)

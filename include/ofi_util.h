@@ -232,7 +232,7 @@ static const uint64_t ofi_rx_mr_flags[] = {
 	[ofi_op_atomic_fetch] = FI_REMOTE_WRITE | FI_REMOTE_READ,
 	[ofi_op_atomic_compare] = FI_REMOTE_WRITE | FI_REMOTE_READ,
 };
-
+struct fi_mr_attr *dup_mr_attr(const struct fi_mr_attr *attr, uint64_t flags);
 static inline uint64_t ofi_rx_mr_reg_flags(uint32_t op, uint16_t atomic_op)
 {
 	if (atomic_op == FI_ATOMIC_READ)

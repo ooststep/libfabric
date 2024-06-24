@@ -52,9 +52,48 @@ static int xnet_mr_close(struct fid *fid)
 	return ret;
 }
 
+static int xnet_mplex_mr_close(struct fid *fid)
+{
+	struct xnet_domain *domain;
+	struct xnet_domain *subdomain;
+	struct fid_list_entry *item;
+	struct ofi_mr *mr;
+	int ret;
+
+	mr = container_of(fid, struct ofi_mr, mr_fid.fid);
+	domain = container_of(&mr->domain->domain_fid, struct xnet_domain,
+			      util_domain.domain_fid.fid);
+
+	ofi_genlock_lock(&domain->subdomain_list_lock);
+	dlist_foreach_container(&domain->subdomain_list,
+				struct fid_list_entry, item, entry) {
+		subdomain = container_of(item->fid, struct xnet_domain,
+					 util_domain.domain_fid.fid);
+		ofi_genlock_lock(&subdomain->util_domain.lock);
+		ret = ofi_mr_map_remove(&subdomain->util_domain.mr_map, mr->key);
+		ofi_genlock_unlock(&subdomain->util_domain.lock);
+		// TODO: handle error
+		if (ret)
+			goto unlock;
+
+		ofi_atomic_dec32(&subdomain->util_domain.ref);
+	}
+unlock:
+	ofi_genlock_unlock(&domain->subdomain_list_lock);
+	return ofi_mr_close(fid);
+}
+
 static struct fi_ops xnet_mr_fi_ops = {
 	.size = sizeof(struct fi_ops),
 	.close = xnet_mr_close,
+	.bind = fi_no_bind,
+	.control = fi_no_control,
+	.ops_open = fi_no_ops_open
+};
+
+static struct fi_ops xnet_mplex_mr_fi_ops = {
+	.size = sizeof(struct fi_ops),
+	.close = xnet_mplex_mr_close,
 	.bind = fi_no_bind,
 	.control = fi_no_control,
 	.ops_open = fi_no_ops_open
@@ -125,6 +164,122 @@ xnet_mr_regattr(struct fid *fid, const struct fi_mr_attr *attr,
 		mr = container_of(*mr_fid, struct ofi_mr, mr_fid.fid);
 		mr->mr_fid.fid.ops = &xnet_mr_fi_ops;
 	}
+	return ret;
+}
+
+static int
+xnet_mplex_mr_reg(struct fid *fid, const void *buf, size_t len,
+		  uint64_t access, uint64_t offset, uint64_t requested_key,
+		  uint64_t flags, struct fid_mr **mr_fid, void *context)
+{
+	struct xnet_domain *domain;
+	struct fid_domain *subdomain;
+	struct fid_list_entry *item;
+	struct fid_mr *sub_mr_fid;
+	struct ofi_mr *mr;
+	int ret;
+
+	domain = container_of(fid, struct xnet_domain,
+			      util_domain.domain_fid.fid);
+	ret = ofi_mr_reg(fid, buf, len, access, offset, requested_key, flags,
+			 mr_fid, context);
+
+	if (ret)
+		goto out;
+
+	mr = container_of(*mr_fid, struct ofi_mr, mr_fid.fid);
+	mr->mr_fid.fid.ops = &xnet_mplex_mr_fi_ops;
+
+	ofi_genlock_lock(&domain->subdomain_list_lock);
+	dlist_foreach_container(&domain->subdomain_list,
+				struct fid_list_entry, item, entry) {
+		subdomain = container_of(item->fid, struct fid_domain, fid);
+		ret = fi_mr_reg(subdomain, buf, len, access, offset,
+				requested_key, flags, &sub_mr_fid,
+				context);
+		// TODO: handle error
+		if (ret)
+			goto unlock;
+	}
+unlock:
+	ofi_genlock_unlock(&domain->subdomain_list_lock);
+out:
+	return ret;
+}
+
+static int
+xnet_mplex_mr_regv(struct fid *fid, const struct iovec *iov,
+		   size_t count, uint64_t access,
+		   uint64_t offset, uint64_t requested_key,
+		   uint64_t flags, struct fid_mr **mr_fid, void *context)
+{
+	struct xnet_domain *domain;
+	struct fid_domain *subdomain;
+	struct fid_list_entry *item;
+	struct fid_mr *sub_mr_fid;
+	struct ofi_mr *mr;
+	int ret;
+
+	domain = container_of(fid, struct xnet_domain,
+			      util_domain.domain_fid.fid);
+	ret = ofi_mr_regv(fid, iov, count, access, offset, requested_key, flags,
+			 mr_fid, context);
+
+	if (ret)
+		goto out;
+
+	mr = container_of(*mr_fid, struct ofi_mr, mr_fid.fid);
+	mr->mr_fid.fid.ops = &xnet_mplex_mr_fi_ops;
+
+	ofi_genlock_lock(&domain->subdomain_list_lock);
+	dlist_foreach_container(&domain->subdomain_list,
+				struct fid_list_entry, item, entry) {
+		subdomain = container_of(item->fid, struct fid_domain, fid);
+		ret = fi_mr_regv(subdomain, iov, count, access, offset,
+					requested_key, flags, &sub_mr_fid, context);
+		// TODO: handle error
+		if (ret)
+			goto unlock;
+	}
+unlock:
+	ofi_genlock_unlock(&domain->subdomain_list_lock);
+out:
+	return ret;
+}
+
+static int
+xnet_mplex_mr_regattr(struct fid *fid, const struct fi_mr_attr *attr,
+		uint64_t flags, struct fid_mr **mr_fid)
+{
+	struct xnet_domain *domain;
+	struct fid_domain *subdomain;
+	struct fid_list_entry *item;
+	struct fid_mr *sub_mr_fid;
+	struct ofi_mr *mr;
+	int ret;
+
+	domain = container_of(fid, struct xnet_domain,
+			      util_domain.domain_fid.fid);
+	ret = ofi_mr_regattr(fid, attr, flags, mr_fid);
+
+	if (ret)
+		goto out;
+
+	mr = container_of(*mr_fid, struct ofi_mr, mr_fid.fid);
+	mr->mr_fid.fid.ops = &xnet_mplex_mr_fi_ops;
+
+	ofi_genlock_lock(&domain->subdomain_list_lock);
+	dlist_foreach_container(&domain->subdomain_list,
+				struct fid_list_entry, item, entry) {
+		subdomain = container_of(item->fid, struct fid_domain, fid);
+		ret = fi_mr_regattr(subdomain, attr, flags, &sub_mr_fid);
+		// TODO: handle error
+		if (ret)
+			goto unlock;
+	}
+unlock:
+	ofi_genlock_unlock(&domain->subdomain_list_lock);
+out:
 	return ret;
 }
 
@@ -223,9 +378,9 @@ static struct fi_ops xnet_mplex_domain_fi_ops = {
 
 static struct fi_ops_mr xnet_mplex_domain_fi_ops_mr = {
 	.size = sizeof(struct fi_ops_mr),
-	.reg = xnet_mr_reg,
-	.regv = xnet_mr_regv,
-	.regattr = xnet_mr_regattr,
+	.reg = xnet_mplex_mr_reg,
+	.regv = xnet_mplex_mr_regv,
+	.regattr = xnet_mplex_mr_regattr,
 };
 
 int xnet_domain_multiplexed(struct fid_domain *domain_fid)
@@ -244,7 +399,7 @@ int xnet_domain_multiplex_open(struct fid_fabric *fabric_fid, struct fi_info *in
 		return -FI_ENOMEM;
 
 	ret = ofi_domain_init(fabric_fid, info, &domain->util_domain, context,
-			      OFI_LOCK_NONE);
+			      OFI_LOCK_MUTEX);
 	if (ret)
 		goto free;
 
@@ -328,7 +483,8 @@ int xnet_domain_open(struct fid_fabric *fabric_fid, struct fi_info *info,
 		return -FI_ENOMEM;
 
 	ret = ofi_domain_init(fabric_fid, info, &domain->util_domain, context,
-			      OFI_LOCK_NONE);
+			      info->domain_attr->threading == FI_THREAD_SAFE ?
+			      OFI_LOCK_MUTEX : OFI_LOCK_NONE);
 	if (ret)
 		goto free;
 
