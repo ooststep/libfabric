@@ -232,7 +232,7 @@ static const uint64_t ofi_rx_mr_flags[] = {
 	[ofi_op_atomic_fetch] = FI_REMOTE_WRITE | FI_REMOTE_READ,
 	[ofi_op_atomic_compare] = FI_REMOTE_WRITE | FI_REMOTE_READ,
 };
-
+struct fi_mr_attr *dup_mr_attr(const struct fi_mr_attr *attr, uint64_t flags);
 static inline uint64_t ofi_rx_mr_reg_flags(uint32_t op, uint16_t atomic_op)
 {
 	if (atomic_op == FI_ATOMIC_READ)
@@ -976,6 +976,7 @@ int ofi_av_close(struct util_av *av);
 int ofi_av_close_lightweight(struct util_av *av);
 
 size_t ofi_av_size(struct util_av *av);
+int ofi_av_insert_addr_at(struct util_av *av, const void *addr, fi_addr_t fi_addr);
 int ofi_av_insert_addr(struct util_av *av, const void *addr, fi_addr_t *fi_addr);
 int ofi_av_remove_addr(struct util_av *av, fi_addr_t fi_addr);
 fi_addr_t ofi_av_lookup_fi_addr_unsafe(struct util_av *av, const void *addr);
@@ -1016,6 +1017,12 @@ int ofi_ip_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
 		     size_t count, uint64_t flags);
 int ofi_ip_av_lookup(struct fid_av *av_fid, fi_addr_t fi_addr,
 		     void *addr, size_t *addrlen);
+int ofi_ip_av_insertsym(struct fid_av *av_fid, const char *node,
+			size_t nodecnt, const char *service, size_t svccnt,
+			fi_addr_t *fi_addr, uint64_t flags, void *context);
+int ofi_ip_av_insertsvc(struct fid_av *av, const char *node,
+			const char *service, fi_addr_t *fi_addr,
+			uint64_t flags, void *context);
 const char *
 ofi_ip_av_straddr(struct fid_av *av, const void *addr, char *buf, size_t *len);
 

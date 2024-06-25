@@ -41,6 +41,8 @@ int ofi_ep_bind_cq(struct util_ep *ep, struct util_cq *cq, uint64_t flags)
 {
 	int ret;
 
+	assert(ep->domain == cq->domain);
+
 	ret = ofi_check_bind_cq_flags(ep, cq, flags);
 	if (ret)
 		return ret;

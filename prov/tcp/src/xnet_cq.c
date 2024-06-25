@@ -315,7 +315,6 @@ free_cq:
 	return ret;
 }
 
-
 static void xnet_cntr_progress(struct util_cntr *cntr)
 {
 	xnet_progress(xnet_cntr2_progress(cntr), false);

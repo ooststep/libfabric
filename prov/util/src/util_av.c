@@ -283,6 +283,34 @@ int ofi_verify_av_insert(struct util_av *av, uint64_t flags, void *context)
 	return 0;
 }
 
+int ofi_av_insert_addr_at(struct util_av *av, const void *addr, fi_addr_t fi_addr)
+{
+	struct util_av_entry *entry = NULL;
+
+	assert(ofi_mutex_held(&av->lock));
+	ofi_straddr_log(av->prov, FI_LOG_INFO, FI_LOG_AV, "inserting addr", addr);
+	HASH_FIND(hh, av->hash, addr, av->addrlen, entry);
+	if (entry) {
+		if (fi_addr == ofi_buf_index(entry))
+			return FI_SUCCESS;
+
+		ofi_straddr_log(av->prov, FI_LOG_WARN, FI_LOG_AV,
+						"addr already in AV", addr);
+		return -FI_EALREADY;
+	}
+
+	entry = ofi_ibuf_alloc_at(av->av_entry_pool, fi_addr);
+	if (!entry)
+		return -FI_ENOMEM;
+
+	memcpy(entry->data, addr, av->addrlen);
+	ofi_atomic_initialize32(&entry->use_cnt, 1);
+	HASH_ADD(hh, av->hash, data, av->addrlen, entry);
+	FI_INFO(av->prov, FI_LOG_AV, "fi_addr: %" PRIu64 "\n",
+		ofi_buf_index(entry));
+	return 0;
+}
+
 int ofi_av_insert_addr(struct util_av *av, const void *addr, fi_addr_t *fi_addr)
 {
 	struct util_av_entry *entry = NULL;
@@ -313,6 +341,7 @@ int ofi_av_insert_addr(struct util_av *av, const void *addr, fi_addr_t *fi_addr)
 		FI_INFO(av->prov, FI_LOG_AV, "fi_addr: %" PRIu64 "\n",
 			ofi_buf_index(entry));
 	}
+
 	return 0;
 }
 
@@ -709,9 +738,9 @@ int ofi_ip_av_insert(struct fid_av *av_fid, const void *addr, size_t count,
 				 count, fi_addr, flags, context);
 }
 
-static int ip_av_insertsvc(struct fid_av *av, const char *node,
-			   const char *service, fi_addr_t *fi_addr,
-			   uint64_t flags, void *context)
+int ofi_ip_av_insertsvc(struct fid_av *av, const char *node,
+			const char *service, fi_addr_t *fi_addr,
+			uint64_t flags, void *context)
 {
 	return fi_av_insertsym(av, node, 1, service, 1, fi_addr, flags, context);
 }
@@ -889,9 +918,9 @@ int ofi_ip_av_sym_getaddr(struct util_av *av, const char *node,
 				     svccnt, addr, addrlen);
 }
 
-static int ip_av_insertsym(struct fid_av *av_fid, const char *node,
-			   size_t nodecnt, const char *service, size_t svccnt,
-			   fi_addr_t *fi_addr, uint64_t flags, void *context)
+int ofi_ip_av_insertsym(struct fid_av *av_fid, const char *node,
+			size_t nodecnt, const char *service, size_t svccnt,
+			fi_addr_t *fi_addr, uint64_t flags, void *context)
 {
 	struct util_av *av;
 	void *addr;
@@ -969,8 +998,8 @@ ofi_ip_av_straddr(struct fid_av *av, const void *addr, char *buf, size_t *len)
 static struct fi_ops_av ip_av_ops = {
 	.size = sizeof(struct fi_ops_av),
 	.insert = ofi_ip_av_insert,
-	.insertsvc = ip_av_insertsvc,
-	.insertsym = ip_av_insertsym,
+	.insertsvc = ofi_ip_av_insertsvc,
+	.insertsym = ofi_ip_av_insertsym,
 	.remove = ofi_ip_av_remove,
 	.lookup = ofi_ip_av_lookup,
 	.straddr = ofi_ip_av_straddr,

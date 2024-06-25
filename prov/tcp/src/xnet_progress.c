@@ -885,6 +885,7 @@ static int xnet_handle_read_req(struct xnet_ep *ep)
 {
 	struct xnet_xfer_entry *resp;
 	struct ofi_rma_iov *rma_iov;
+	struct xnet_domain *domain;
 	ssize_t i;
 	int ret;
 
@@ -908,9 +909,10 @@ static int xnet_handle_read_req(struct xnet_ep *ep)
 
 	resp->iov_cnt = 1 + resp->hdr.base_hdr.rma_iov_cnt;
 	resp->hdr.base_hdr.size = resp->iov[0].iov_len;
+	domain = container_of(ep->util_ep.domain, struct xnet_domain, util_domain);
 	for (i = 0; i < resp->hdr.base_hdr.rma_iov_cnt; i++) {
-		ret = ofi_mr_verify(&ep->util_ep.domain->mr_map, rma_iov[i].len,
-				    (uintptr_t *) &rma_iov[i].addr,
+		ret = ofi_mr_verify(&domain->util_domain.mr_map,
+				    rma_iov[i].len, (uintptr_t *) &rma_iov[i].addr,
 				    rma_iov[i].key, FI_REMOTE_READ);
 		if (ret) {
 			FI_WARN(&xnet_prov, FI_LOG_EP_DATA,
