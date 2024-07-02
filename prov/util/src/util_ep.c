@@ -41,6 +41,8 @@ int ofi_ep_bind_cq(struct util_ep *ep, struct util_cq *cq, uint64_t flags)
 {
 	int ret;
 
+	assert(ep->domain == cq->domain);
+
 	ret = ofi_check_bind_cq_flags(ep, cq, flags);
 	if (ret)
 		return ret;
@@ -101,6 +103,8 @@ int ofi_ep_bind_av(struct util_ep *util_ep, struct util_av *av)
 
 int ofi_ep_bind_cntr(struct util_ep *ep, struct util_cntr *cntr, uint64_t flags)
 {
+	assert(ep->domain == cntr->domain);
+
 	if (flags & ~(FI_TRANSMIT | FI_RECV | FI_READ  | FI_WRITE |
 		      FI_REMOTE_READ | FI_REMOTE_WRITE)) {
 		FI_WARN(ep->domain->fabric->prov, FI_LOG_EP_CTRL,
