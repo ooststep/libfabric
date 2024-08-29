@@ -168,7 +168,10 @@ ssize_t ofi_sockapi_recvv_uring(struct ofi_sockapi *sockapi, SOCKET sock,
 	if (!sqe)
 		return -FI_EOVERFLOW;
 
-	io_uring_prep_readv(sqe, sock, iov, cnt, flags);
+	/* MSG_NOSIGNAL would return ENOTSUP with io_uring */
+	flags &= ~MSG_NOSIGNAL;
+
+	io_uring_prep_readv2(sqe, sock, iov, cnt, 0, flags);
 	io_uring_sqe_set_data(sqe, ctx);
 	ctx->uring_sqe_inuse = true;
 	uring->credits--;
