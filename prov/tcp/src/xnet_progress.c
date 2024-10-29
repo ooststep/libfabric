@@ -369,7 +369,8 @@ int xnet_uring_pollin_add(struct xnet_progress *progress, int fd,
 	assert(xnet_progress_locked(progress));
 	if (!pollin_ctx->uring_sqe_inuse) {
 		ret = ofi_sockctx_uring_poll_add(progress->rx_uring.sockapi,
-						 fd, POLLIN, multishot,
+						 fd, POLLIN,
+						 multishot && xnet_io_uring_multishot,
 						 pollin_ctx);
 		if (ret != -OFI_EINPROGRESS_URING)
 			return ret;
@@ -1328,6 +1329,7 @@ static void xnet_progress_cqe(struct xnet_progress *progress,
 	struct xnet_ep *ep;
 	struct xnet_conn_handle *conn;
 	struct xnet_pep *pep;
+	int ret;
 
 	assert(xnet_io_uring);
 	sockctx = (struct ofi_sockctx *) cqe->user_data;
@@ -1350,8 +1352,19 @@ static void xnet_progress_cqe(struct xnet_progress *progress,
 	case FI_CLASS_PEP:
 		pep = container_of(fid, struct xnet_pep, util_pep.pep_fid.fid);
 		if (sockctx == &pep->pollin_sockctx) {
-			if (cqe->res >= 0)
+			if (cqe->res >= 0) {
 				xnet_accept_sock(pep);
+				if (xnet_io_uring_multishot)
+					break;
+
+				ret = xnet_uring_pollin_add(pep->progress, pep->sock,
+							false, &pep->pollin_sockctx);
+				if (ret) {
+					FI_WARN(&xnet_prov, FI_LOG_EP_CTRL,
+						"pollin add failed (%d)\n", ret);
+					fi_close(&pep->util_pep.pep_fid.fid);
+				}
+			}
 		}
 		/* Must be a cancelation otherwise */
 		break;

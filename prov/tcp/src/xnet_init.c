@@ -67,6 +67,7 @@ size_t xnet_zerocopy_size = SIZE_MAX;
 int xnet_trace_msg;
 int xnet_disable_autoprog;
 int xnet_io_uring;
+bool xnet_io_uring_multishot = false;
 int xnet_max_saved = 64;
 size_t xnet_max_inject = XNET_DEF_INJECT;
 size_t xnet_buf_size = XNET_DEF_BUF_SIZE;
@@ -186,6 +187,8 @@ static void xnet_init_env(void)
 			"Enable io_uring support if available (default: %d)", xnet_io_uring);
 	fi_param_get_bool(&xnet_prov, "io_uring",
 			 &xnet_io_uring);
+	if (xnet_io_uring)
+		xnet_io_uring_multishot = ofi_kernel_verscmp(5, 19, 0) >= 0;
 }
 
 static void xnet_fini(void)
