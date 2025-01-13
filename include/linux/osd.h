@@ -41,11 +41,13 @@
 #include <endian.h>
 #include <sys/mman.h>
 #include <string.h>
+#include <stdio.h>
 #include <assert.h>
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/utsname.h>
 
 #include <linux/errqueue.h>
 #include <ifaddrs.h>
@@ -226,6 +228,29 @@ ofi_recvv_socket(SOCKET fd, const struct iovec *iov, size_t cnt, int flags)
        msg.msg_iovlen = cnt;
 
        return ofi_recvmsg_tcp(fd, &msg, flags);
+}
+
+static inline int ofi_kernel_verscmp(int major, int minor, int revision)
+{
+	int ver[3];
+	struct utsname buf;
+	if (uname(&buf) < 0) {
+		return -1;
+	}
+	if (sscanf(buf.release, "%d.%d.%d", &ver[0], &ver[1], &ver[2]) != 3) {
+		return -1;
+	}
+
+	printf("Kernel version: %d.%d.%d\n", ver[0], ver[1], ver[2]);
+
+	if (ver[0] > major || (ver[0] == major && ver[1] > minor) ||
+		(ver[0] == major && ver[1] == minor && ver[2] > revision)) {
+		return 1;
+	} else if (ver[0] == major && ver[1] == minor && ver[2] == revision) {
+		return 0;
+	} else {
+		return -1;
+	}
 }
 
 #endif /* _LINUX_OSD_H_ */
