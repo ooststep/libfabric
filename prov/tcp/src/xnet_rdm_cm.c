@@ -311,6 +311,7 @@ xnet_alloc_conn(struct xnet_rdm *rdm, struct util_peer_addr *peer)
 	conn->rdm = rdm;
 	conn->flags = 0;
 	conn->peer = peer;
+	conn->conn_timeout = 0;
 	rxm_ref_peer(peer);
 
 	FI_DBG(&xnet_prov, FI_LOG_EP_CTRL, "allocated conn %p\n", conn);
@@ -364,6 +365,13 @@ ssize_t xnet_get_conn(struct xnet_rdm *rdm, fi_addr_t addr,
 	}
 
 	if ((*conn)->ep->state != XNET_CONNECTED) {
+		if (xnet_rdm_conn_timeout) {
+			if (!(*conn)->conn_timeout)
+				(*conn)->conn_timeout = ofi_timeout_time(xnet_rdm_conn_timeout);
+			else if (ofi_gettime_ms() > (*conn)->conn_timeout)
+				return -FI_ETIMEDOUT;
+		}
+
 		/* Force progress for apps that simply retry sending without
 		 * trying to drive progress in between.
 		 */
@@ -371,6 +379,7 @@ ssize_t xnet_get_conn(struct xnet_rdm *rdm, fi_addr_t addr,
 		return -FI_EAGAIN;
 	}
 
+	(*conn)->conn_timeout = 0;
 	return 0;
 }
 

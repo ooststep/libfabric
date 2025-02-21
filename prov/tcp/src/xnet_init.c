@@ -71,6 +71,7 @@ int xnet_max_saved = 64;
 size_t xnet_max_inject = XNET_DEF_INJECT;
 size_t xnet_buf_size = XNET_DEF_BUF_SIZE;
 size_t xnet_max_saved_size = SIZE_MAX;
+int xnet_rdm_conn_timeout = 0;
 
 
 static void xnet_init_env(void)
@@ -186,6 +187,14 @@ static void xnet_init_env(void)
 			"Enable io_uring support if available (default: %d)", xnet_io_uring);
 	fi_param_get_bool(&xnet_prov, "io_uring",
 			 &xnet_io_uring);
+	fi_param_define(&xnet_prov, "rdm_conn_timeout", FI_PARAM_INT,
+			"Max time in milliseconds an rdm ep may remain idle. "
+			"If the limit is exceeded, send/recv "
+			"operations will return an FI_ETIMEDOUT error."
+			"The limit will be reset by any successful operation."
+			"Set to 0 to disable (default: 0)");
+	fi_param_get_int(&xnet_prov, "rdm_conn_timeout",
+			 &xnet_rdm_conn_timeout);
 }
 
 static void xnet_fini(void)

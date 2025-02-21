@@ -119,6 +119,7 @@ extern int xnet_max_saved;
 extern size_t xnet_max_saved_size;
 extern size_t xnet_max_inject;
 extern size_t xnet_buf_size;
+extern int xnet_rdm_conn_timeout;
 struct xnet_xfer_entry;
 struct xnet_ep;
 struct xnet_rdm;
@@ -287,6 +288,7 @@ struct xnet_conn {
 	struct util_peer_addr	*peer;
 	uint32_t		remote_pid;
 	int			flags;
+	int			conn_timeout;
 };
 
 struct xnet_rdm {
