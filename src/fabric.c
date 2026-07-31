@@ -1149,6 +1149,60 @@ ofi_filter_info_by_addr_format(struct fi_info **info, uint32_t addr_format)
 	}
 }
 
+static const struct {
+	const char	*name;
+	uint32_t	fmt;
+} ofi_addr_formats[] = {
+	{ "FI_SOCKADDR",	FI_SOCKADDR },
+	{ "FI_SOCKADDR_IN",	FI_SOCKADDR_IN },
+	{ "FI_SOCKADDR_IN6",	FI_SOCKADDR_IN6 },
+	{ "FI_SOCKADDR_IB",	FI_SOCKADDR_IB },
+	{ "FI_ADDR_IB_UD",	FI_ADDR_IB_UD },
+	{ "FI_ADDR_EFA",	FI_ADDR_EFA },
+	{ "FI_ADDR_PSMX3",	FI_ADDR_PSMX3 },
+	{ "FI_ADDR_OPX",	FI_ADDR_OPX },
+	{ "FI_ADDR_CXI",	FI_ADDR_CXI },
+	{ "FI_ADDR_STR",	FI_ADDR_STR },
+};
+
+static uint32_t ofi_parse_addr_format(const char *str)
+{
+	size_t i;
+
+	if (!str)
+		return FI_FORMAT_UNSPEC;
+
+	for (i = 0; i < ARRAY_SIZE(ofi_addr_formats); i++) {
+		if (!strcasecmp(str, ofi_addr_formats[i].name))
+			return ofi_addr_formats[i].fmt;
+	}
+
+	FI_WARN(&core_prov, FI_LOG_CORE,
+		"Unknown addr_format filter value: %s\n", str);
+	return FI_FORMAT_UNSPEC;
+}
+
+static void
+ofi_filter_info_by_addr_format(struct fi_info **info, uint32_t addr_format)
+{
+	struct fi_info *cur, *prev = NULL, *next;
+
+	for (cur = *info; cur; cur = next) {
+		next = cur->next;
+
+		if (cur->addr_format != addr_format) {
+			if (prev)
+				prev->next = next;
+			else
+				*info = next;
+			cur->next = NULL;
+			fi_freeinfo(cur);
+		} else {
+			prev = cur;
+		}
+	}
+}
+
 static bool
 ofi_info_match_prov(struct fi_info *info, struct ofi_info_match *match)
 {
