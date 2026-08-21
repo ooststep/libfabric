@@ -234,6 +234,9 @@ The verbs provider checks for the following environment variables.
 *FI_VERBS_USE_FLOW_CTRL*
 : Enable credit based flow control. Requires RxM to work. (default: yes)
 
+*FI_VERBS_USE_FLOW_CTRL*
+: Enable credit based flow control. Requires RxM to work. (default: yes)
+
 ### Variables specific to MSG endpoints
 
 *FI_VERBS_IFACE*
