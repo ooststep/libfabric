@@ -2179,6 +2179,8 @@ static int vrb_proximity_compare(const void *a, const void *b)
 {
 	const struct vrb_nic_proximity_cache *nic_a;
 	const struct vrb_nic_proximity_cache *nic_b;
+	uint32_t bus_id_a;
+	uint32_t bus_id_b;
 
 	nic_a = (const struct vrb_nic_proximity_cache *)a;
 	nic_b = (const struct vrb_nic_proximity_cache *)b;
@@ -2186,6 +2188,17 @@ static int vrb_proximity_compare(const void *a, const void *b)
 	if (nic_a->proximity < nic_b->proximity)
 		return -1;
 	if (nic_a->proximity > nic_b->proximity)
+		return 1;
+
+	bus_id_a = nic_a->info->nic && nic_a->info->nic->bus_attr &&
+		nic_a->info->nic->bus_attr->bus_type == FI_BUS_PCI ?
+		nic_a->info->nic->bus_attr->attr.pci.bus_id : UINT32_MAX;
+	bus_id_b = nic_b->info->nic && nic_b->info->nic->bus_attr &&
+		nic_b->info->nic->bus_attr->bus_type == FI_BUS_PCI ?
+		nic_b->info->nic->bus_attr->attr.pci.bus_id : UINT32_MAX;
+	if (bus_id_a < bus_id_b)
+		return -1;
+	if (bus_id_a > bus_id_b)
 		return 1;
 	return 0;
 }
