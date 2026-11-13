@@ -45,6 +45,9 @@
 #include <level_zero/ze_api.h>
 #include <sys/ioctl.h>
 #include <linux/dma-buf.h>
+#if HAVE_LIBDL
+#include <dlfcn.h>
+#endif
 
 /* ZEX_extension_memory_free_callback from intel/compute-runtime
  * (level_zero/ze_intel_gpu.h). That header is C++ only, so its ABI is
@@ -1167,6 +1170,29 @@ bool ze_hmem_free_cb_supported(void)
 	return libze_ops.zexMemFreeRegisterCallbackExt != NULL;
 }
 
+/* The driver holds the callback pointer until the allocation is freed and
+ * there is no unregister, so libfabric must stay mapped once a callback is
+ * registered or the driver would call into unmapped code after dlclose.
+ * Promote our own mapping to RTLD_NODELETE the first time.
+ */
+static void ze_hmem_pin_library(void)
+{
+#if HAVE_LIBDL
+	static bool pinned;
+	Dl_info info;
+
+	if (pinned)
+		return;
+
+	if (dladdr(ze_hmem_pin_library, &info) && info.dli_fname &&
+	    dlopen(info.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_NODELETE))
+		pinned = true;
+	else
+		FI_INFO(&core_prov, FI_LOG_CORE,
+			"Could not pin libfabric for ZE free callbacks\n");
+#endif
+}
+
 /* The driver invokes cb(user_data) once, on the thread freeing the
  * allocation, before the memory is released. There is no unregister.
  */
@@ -1186,6 +1212,8 @@ int ze_hmem_register_free_cb(void *base, void (*cb)(void *), void *user_data)
 			base, ze_ret);
 		return -FI_EIO;
 	}
+
+	ze_hmem_pin_library();
 	return FI_SUCCESS;
 }
 
