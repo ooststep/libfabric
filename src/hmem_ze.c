@@ -46,6 +46,19 @@
 #include <sys/ioctl.h>
 #include <linux/dma-buf.h>
 
+/* ZEX_extension_memory_free_callback from intel/compute-runtime
+ * (level_zero/ze_intel_gpu.h). That header is C++ only, so its ABI is
+ * reproduced here.
+ */
+#define OFI_ZEX_STRUCTURE_TYPE_MEMORY_FREE_CALLBACK_EXT_DESC 0x00030030
+
+struct ofi_zex_mem_free_cb_desc {
+	uint32_t stype;
+	const void *pNext;
+	void (*pfnCallback)(void *pUserData);
+	void *pUserData;
+};
+
 struct ofi_ze_dev_info {
 	ze_command_queue_handle_t cmd_queue;
 	int pci_device;
@@ -147,6 +160,9 @@ struct libze_ops {
 						      void *ptr, size_t len);
 	ze_result_t (*zexDriverReleaseImportedPointer)(ze_driver_handle_t hDriver,
 						       void *ptr);
+	ze_result_t (*zexMemFreeRegisterCallbackExt)(ze_context_handle_t hContext,
+				struct ofi_zex_mem_free_cb_desc *desc,
+				void *ptr);
 	ze_result_t (*zeMemAllocDevice)(ze_context_handle_t hContext,
 					const ze_device_mem_alloc_desc_t* device_desc,
 					size_t size, size_t alignment,
@@ -787,6 +803,12 @@ int ze_hmem_init(void)
 	if (ze_ret)
 		host_reg_enabled = false;
 
+	ze_ret = ofi_zeDriverGetExtensionFunctionAddress(
+			driver, "zexMemFreeRegisterCallbackExt",
+			(void *)&libze_ops.zexMemFreeRegisterCallbackExt);
+	if (ze_ret)
+		libze_ops.zexMemFreeRegisterCallbackExt = NULL;
+
 	ze_ret = ofi_zeContextCreate(driver, &context_desc, &context);
 	if (ze_ret)
 		return -FI_EIO;
@@ -1136,6 +1158,33 @@ int ze_hmem_host_unregister(void *ptr)
 			FI_WARN(&core_prov, FI_LOG_CORE,
 				"Failed to release imported memory: ptr %p", ptr);
 		}
+	}
+	return FI_SUCCESS;
+}
+
+bool ze_hmem_free_cb_supported(void)
+{
+	return libze_ops.zexMemFreeRegisterCallbackExt != NULL;
+}
+
+/* The driver invokes cb(user_data) once, on the thread freeing the
+ * allocation, before the memory is released. There is no unregister.
+ */
+int ze_hmem_register_free_cb(void *base, void (*cb)(void *), void *user_data)
+{
+	struct ofi_zex_mem_free_cb_desc desc = {
+		.stype = OFI_ZEX_STRUCTURE_TYPE_MEMORY_FREE_CALLBACK_EXT_DESC,
+		.pfnCallback = cb,
+		.pUserData = user_data,
+	};
+	ze_result_t ze_ret;
+
+	ze_ret = (*libze_ops.zexMemFreeRegisterCallbackExt)(context, &desc, base);
+	if (ze_ret) {
+		FI_WARN(&core_prov, FI_LOG_CORE,
+			"Failed to register free callback: ptr %p (%d)\n",
+			base, ze_ret);
+		return -FI_EIO;
 	}
 	return FI_SUCCESS;
 }
@@ -1506,6 +1555,16 @@ int ze_hmem_host_register(void *ptr, size_t size)
 int ze_hmem_host_unregister(void *ptr)
 {
 	return FI_SUCCESS;
+}
+
+bool ze_hmem_free_cb_supported(void)
+{
+	return false;
+}
+
+int ze_hmem_register_free_cb(void *base, void (*cb)(void *), void *user_data)
+{
+	return -FI_ENOSYS;
 }
 
 int ze_dev_register(const void *addr, size_t size, uint64_t *handle)

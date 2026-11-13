@@ -36,10 +36,48 @@
 
 #include "ofi_hmem.h"
 
+/* Invoked by the driver on the thread freeing the allocation, before the
+ * memory is released, so its range can still be queried. The callback cannot
+ * be unregistered, so do nothing once the monitor has stopped.
+ */
+static void ze_mm_free_cb(void *base)
+{
+	void *addr;
+	size_t size;
+
+	if (ze_monitor->state != FI_MM_STATE_RUNNING)
+		return;
+
+	if (ze_hmem_get_base_addr(base, 0, &addr, &size))
+		return;
+
+	pthread_rwlock_rdlock(&mm_list_rwlock);
+	pthread_mutex_lock(&mm_lock);
+	ofi_monitor_notify(ze_monitor, addr, size);
+	pthread_mutex_unlock(&mm_lock);
+	pthread_rwlock_unlock(&mm_list_rwlock);
+}
+
+/* A callback is registered per subscription. The driver keeps one callback
+ * per allocation, so the latest registration is the one that fires; a single
+ * notification covers every cached MR within the allocation. Registration
+ * failure falls back to the allocation id check in ze_mm_valid().
+ */
 static int ze_mm_subscribe(struct ofi_mem_monitor *monitor, const void *addr,
 			   size_t len, union ofi_mr_hmem_info *hmem_info)
 {
-	return ze_hmem_get_id(addr, &hmem_info->ze_id);
+	void *base;
+	size_t size;
+	int ret;
+
+	ret = ze_hmem_get_id(addr, &hmem_info->ze_id);
+	if (ret || !ze_hmem_free_cb_supported())
+		return ret;
+
+	if (!ze_hmem_get_base_addr(addr, len, &base, &size))
+		ze_hmem_register_free_cb(base, ze_mm_free_cb, base);
+
+	return FI_SUCCESS;
 }
 
 static void ze_mm_unsubscribe(struct ofi_mem_monitor *monitor,

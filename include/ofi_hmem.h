@@ -286,6 +286,8 @@ int ze_hmem_get_base_addr(const void *ptr, size_t len, void **base,
 int ze_hmem_get_id(const void *ptr, uint64_t *id);
 int ze_hmem_host_register(void *ptr, size_t size);
 int ze_hmem_host_unregister(void *ptr);
+bool ze_hmem_free_cb_supported(void);
+int ze_hmem_register_free_cb(void *base, void (*cb)(void *), void *user_data);
 int ze_dev_register(const void *addr, size_t size, uint64_t *handle);
 int ze_dev_unregister(uint64_t handle);
 int ze_dev_reg_copy_to_hmem(uint64_t handle, void *dest, const void *src,
